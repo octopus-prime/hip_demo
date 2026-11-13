@@ -1,12 +1,12 @@
 # HIP Demo
 
-A C++23 GPU path tracer that renders a Cornell-style box with red and green walls, a ceiling area light, three spheres, and three tilted tori. Two executables render the same scene:
+A C++23 GPU path tracer that renders a Cornell-style box with red and green walls, a ceiling area light, three spheres, and three tilted tori:
 
 - `hip_demo` uses HIP kernels and intersects the objects directly.
-- `hiprt_demo` uses HIP RT to traverse bounding boxes for custom primitives. The sphere and torus intersection functions run on the GPU; the room is intersected directly. It checks representative intersections against the direct implementation before rendering.
+- `hiprt_demo` uses HIP RT to traverse bounding boxes for custom primitives. With HIP SDK 7.1 / HIP RT 3.0 it also renders a faceted triangle-mesh crystal using HIP RT's native triangle traversal. The room is intersected directly. It checks representative primitive and mesh intersections before rendering.
 
 Both render UHD 4K images (3840 x 2160), use HIP `float3`, default to 1024 samples per pixel, and sample the area light directly. Diffuse indirect bounces show color bleeding; the objects include metal, glass, diffuse, and energy-conserving Phong-style glossy materials. Rendering at full quality can take substantially longer than a low-resolution preview.
-Each executable reports GPU render time measured with HIP events around the render kernels. Device selection, scene/BVH setup, HIP RT intersection checks, image transfer, and BMP writing are excluded. Compare runs on the same GPU with the same sample count.
+Each executable reports GPU render time measured with HIP events around the render kernels. Device selection, scene/BVH setup, HIP RT intersection checks, image transfer, and BMP writing are excluded. With the mesh enabled the two scenes differ, so their render times are not directly comparable.
 
 The direct HIP implementation is in `src/hip_demo.hip`, the HIP RT implementation is in `src/hiprt_demo.hip`, and their shared rendering code is in `src/renderer_common.h`.
 
@@ -37,3 +37,19 @@ When running either executable directly, the BMP is saved in the current directo
 ```powershell
 .\build\bin\hiprt_demo.exe preview.bmp 32
 ```
+
+### HIP RT triangle mesh on Windows
+
+The mesh is enabled by default with HIP SDK 7.1 / HIP RT 3.0. It is disabled with HIP RT 3.1 because triangle traversal produced incorrect hits on the RX 9070 XT in testing. Existing HIP RT builds without the mesh remain usable. Set `HIP_DEMO_HIPRT_MESH=OFF` to disable the mesh explicitly.
+
+To keep SDK versions separate, configure a new build directory and select the 7.1 compiler:
+
+```powershell
+$env:HIP_PATH = 'C:\Program Files\AMD\ROCm\7.1'
+$env:ROCM_PATH = $env:HIP_PATH
+cmake -S . -B build\hip71 "-DHIPCC_EXECUTABLE=$env:HIP_PATH\bin\hipcc.exe"
+cmake --build build\hip71 --config Release
+.\build\hip71\bin\hiprt_demo.exe
+```
+
+The mesh build copies the matching HIP and COMGR runtime DLLs alongside the executables, in addition to the HIP RT runtime and kernel bundles. Keep these files together: using a different system HIP runtime produced incorrect triangle hits in testing.

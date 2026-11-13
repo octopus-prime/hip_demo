@@ -165,6 +165,30 @@ if(HIP_DEMO_BUILD_HIPRT)
     endif()
     if(HIPRT_INCLUDE_DIR AND HIPRT_LIBRARY AND HIPRT_RUNTIME AND HIPRT_DEVICE_LIBRARY
         AND HIPRT_KERNEL_BUNDLE AND HIPRT_OROCHI_BUNDLE)
+        if(WIN32 AND HIPRT_VERSION STREQUAL "03000")
+            set(HIPRT_MESH_DEFAULT ON)
+        else()
+            set(HIPRT_MESH_DEFAULT OFF)
+        endif()
+        option(HIP_DEMO_HIPRT_MESH "Enable the HIP RT triangle mesh" ${HIPRT_MESH_DEFAULT})
+        if(HIP_DEMO_HIPRT_MESH AND NOT HIPRT_VERSION STREQUAL "03000")
+            message(FATAL_ERROR
+                "The triangle mesh is verified with HIP RT 3.0 (HIP SDK 7.1). "
+                "HIP RT ${HIPRT_VERSION} is not enabled for this scene. "
+                "Use HIP SDK 7.1 or set HIP_DEMO_HIPRT_MESH=OFF.")
+        endif()
+        if(HIP_DEMO_HIPRT_MESH)
+            set(HIPRT_MESH_CONFIG "#define HIP_DEMO_HIPRT_MESH 1\n")
+            message(STATUS "HIP RT triangle mesh: enabled")
+        else()
+            set(HIPRT_MESH_CONFIG "/* HIP RT triangle mesh disabled */\n")
+            message(STATUS "HIP RT triangle mesh: disabled (enable with HIP SDK 7.1 / HIP RT 3.0)")
+        endif()
+        file(CONFIGURE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/hiprt_mesh_config.h"
+            CONTENT "${HIPRT_MESH_CONFIG}"
+            @ONLY
+        )
         set(HIPRT_DEMO_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}")
         set(HIPRT_LINK_OPTIONS)
         if(UNIX)
@@ -174,6 +198,14 @@ if(HIP_DEMO_BUILD_HIPRT)
         set(HIPRT_RUNTIME_FILES "${HIPRT_KERNEL_BUNDLE}" "${HIPRT_OROCHI_BUNDLE}")
         if(WIN32)
             list(APPEND HIPRT_RUNTIME_FILES "${HIPRT_RUNTIME}")
+            if(HIP_DEMO_HIPRT_MESH)
+                find_file(HIPRT_HIP_RUNTIME NAMES amdhip64_7.dll HINTS "${HIPCC_BIN_DIR}" NO_DEFAULT_PATH)
+                find_file(HIPRT_COMGR_RUNTIME NAMES amd_comgr_3.dll HINTS "${HIPCC_BIN_DIR}" NO_DEFAULT_PATH)
+                if(NOT HIPRT_HIP_RUNTIME OR NOT HIPRT_COMGR_RUNTIME)
+                    message(FATAL_ERROR "The HIP SDK's amdhip64_7.dll and amd_comgr_3.dll are required for the mesh build.")
+                endif()
+                list(APPEND HIPRT_RUNTIME_FILES "${HIPRT_HIP_RUNTIME}" "${HIPRT_COMGR_RUNTIME}")
+            endif()
         endif()
         add_custom_target(
             hiprt_runtime
@@ -192,6 +224,7 @@ if(HIP_DEMO_BUILD_HIPRT)
                 -o "${HIPRT_DEMO_OUTPUT}"
             DEPENDS "${HIPRT_DEMO_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
                 "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
+                "${CMAKE_CURRENT_BINARY_DIR}/hiprt_mesh_config.h"
                 "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
             VERBATIM
             COMMENT "Compiling HIP RT C++23 ray tracer"
