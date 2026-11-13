@@ -26,6 +26,10 @@ constexpr int image_height = 2160;
 constexpr int samples_per_pixel = 1024;
 // Keep individual 4K kernels short enough for GPU watchdogs.
 constexpr int samples_per_batch = 8;
+constexpr int adaptive_min_samples = 64;
+constexpr int adaptive_specular_min_samples = 256;
+constexpr float adaptive_relative_error = 0.05f;
+constexpr float adaptive_brightness_floor = 0.05f;
 constexpr int maximum_bounces = 8;
 constexpr float pi = 3.14159265359f;
 constexpr unsigned int scene_object_count = 7;
@@ -388,7 +392,7 @@ __device__ float reflectance(float cosine, float refraction_index) {
         powf(1.0f - cosine, 5.0f);
 }
 
-__device__ float3 trace(Ray ray, Random& random, TraceScene scene) {
+__device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specular_primary = nullptr) {
     float3 radiance{0.0f, 0.0f, 0.0f};
     float3 throughput{1.0f, 1.0f, 1.0f};
     bool include_emission = true;
@@ -399,6 +403,10 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene) {
             break;
         }
 
+        if (bounce == 0 && specular_primary &&
+            (hit.material == Material::glass || hit.material == Material::metal || hit.material == Material::phong)) {
+            *specular_primary = true;
+        }
         if (hit.material == Material::emissive) {
             if (include_emission && hit.front_face) {
                 radiance = radiance + throughput * light_radiance();
@@ -482,6 +490,62 @@ __device__ float tone_map(float value) {
     return sqrtf(value / (1.0f + value));
 }
 
+struct AdaptivePixel {
+    float3 sum;
+    float3 mean;
+    float3 m2;
+    unsigned int count;
+    bool specular;
+    bool done;
+};
+
+__device__ void add_adaptive_sample(AdaptivePixel& pixel, float3 value) {
+    ++pixel.count;
+    pixel.sum = pixel.sum + value;
+    const float3 delta = value - pixel.mean;
+    pixel.mean = pixel.mean + delta / static_cast<float>(pixel.count);
+    pixel.m2 = pixel.m2 + delta * (value - pixel.mean);
+}
+
+__device__ bool adaptive_converged(const AdaptivePixel& pixel) {
+    const unsigned int minimum = pixel.specular ? adaptive_specular_min_samples : adaptive_min_samples;
+    if (pixel.count < minimum) {
+        return false;
+    }
+    const float n = static_cast<float>(pixel.count);
+    const float3 scale{fmaxf(adaptive_brightness_floor, fabsf(pixel.mean.x)),
+                       fmaxf(adaptive_brightness_floor, fabsf(pixel.mean.y)),
+                       fmaxf(adaptive_brightness_floor, fabsf(pixel.mean.z))};
+    // Welford's M2 gives the squared standard error as M2 / (n * (n - 1)).
+    const float multiplier = n * (n - 1.0f) * adaptive_relative_error * adaptive_relative_error;
+    return isfinite(pixel.m2.x) && isfinite(pixel.m2.y) && isfinite(pixel.m2.z) &&
+        pixel.m2.x <= multiplier * scale.x * scale.x &&
+        pixel.m2.y <= multiplier * scale.y * scale.y &&
+        pixel.m2.z <= multiplier * scale.z * scale.z;
+}
+
+__device__ std::uint32_t encode_color(float3 color) {
+    const auto red = static_cast<std::uint32_t>(255.999f * clamp01(tone_map(color.x)));
+    const auto green = static_cast<std::uint32_t>(255.999f * clamp01(tone_map(color.y)));
+    const auto blue = static_cast<std::uint32_t>(255.999f * clamp01(tone_map(color.z)));
+    return red | (green << 8) | (blue << 16);
+}
+
+__device__ float3 sample_pixel(int x, int y, int width, int height, int sample, float3 forward, float3 right,
+                               float3 up, TraceScene scene, bool* specular_primary = nullptr) {
+    constexpr float half_view_height = 0.41421356f;
+    constexpr float aspect_ratio = static_cast<float>(image_width) / image_height;
+    const std::uint32_t seed = static_cast<std::uint32_t>(
+        (x + y * width + 1) * 747796405u + (sample + 1) * 2891336453u);
+    Random random{seed == 0 ? 1u : seed};
+    const float u = (2.0f * (static_cast<float>(x) + random.next()) / width - 1.0f) *
+        aspect_ratio * half_view_height;
+    const float v = (1.0f - 2.0f * (static_cast<float>(y) + random.next()) / height) *
+        half_view_height;
+    const float3 direction = normalize(forward + u * right + v * up);
+    return trace({camera_position, direction}, random, scene, specular_primary);
+}
+
 __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene scene, int width, int height,
                               int first_sample, int sample_end, int sample_count) {
     const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
@@ -493,31 +557,75 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
     const float3 forward = normalize(camera_target - camera_position);
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
-    constexpr float half_view_height = 0.41421356f;
-    constexpr float aspect_ratio = static_cast<float>(image_width) / image_height;
     const int pixel_index = x + y * width;
     float3 accumulated = first_sample == 0 ? float3{0.0f, 0.0f, 0.0f} : sums[pixel_index];
 
     for (int sample = first_sample; sample < sample_end; ++sample) {
-        const std::uint32_t seed = static_cast<std::uint32_t>(
-            (x + y * width + 1) * 747796405u + (sample + 1) * 2891336453u);
-        Random random{seed == 0 ? 1u : seed};
-        const float u = (2.0f * (static_cast<float>(x) + random.next()) / width - 1.0f) *
-            aspect_ratio * half_view_height;
-        const float v = (1.0f - 2.0f * (static_cast<float>(y) + random.next()) / height) *
-            half_view_height;
-        const float3 direction = normalize(forward + u * right + v * up);
-        accumulated = accumulated + trace({camera_position, direction}, random, scene);
+        accumulated = accumulated + sample_pixel(x, y, width, height, sample, forward, right, up, scene);
     }
 
     if (sample_end == sample_count) {
-        const float3 color = accumulated / static_cast<float>(sample_count);
-        const auto red = static_cast<std::uint32_t>(255.999f * clamp01(tone_map(color.x)));
-        const auto green = static_cast<std::uint32_t>(255.999f * clamp01(tone_map(color.y)));
-        const auto blue = static_cast<std::uint32_t>(255.999f * clamp01(tone_map(color.z)));
-        pixels[pixel_index] = red | (green << 8) | (blue << 16);
+        pixels[pixel_index] = encode_color(accumulated / static_cast<float>(sample_count));
     } else {
         sums[pixel_index] = accumulated;
+    }
+}
+
+__global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* states, TraceScene scene,
+                                       int width, int height, int first_sample, int sample_end, int sample_count) {
+    const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
+    if (x >= width || y >= height) {
+        return;
+    }
+    const int pixel_index = x + y * width;
+    AdaptivePixel pixel = first_sample == 0 ? AdaptivePixel{} : states[pixel_index];
+    if (pixel.done) {
+        return;
+    }
+    const float3 forward = normalize(camera_target - camera_position);
+    const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
+    const float3 up = cross(right, forward);
+    for (int sample = first_sample; sample < sample_end; ++sample) {
+        add_adaptive_sample(pixel, sample_pixel(x, y, width, height, sample, forward, right, up, scene,
+                                                &pixel.specular));
+    }
+    pixel.done = sample_end == sample_count || adaptive_converged(pixel);
+    if (pixel.done) {
+        pixels[pixel_index] = encode_color(pixel.sum / static_cast<float>(pixel.count));
+    }
+    states[pixel_index] = pixel;
+}
+
+struct SampleStatistics {
+    unsigned long long total;
+    unsigned int minimum;
+    unsigned int maximum;
+};
+
+__global__ void summarize_samples(const AdaptivePixel* states, std::size_t count, SampleStatistics* statistics) {
+    __shared__ unsigned long long totals[256];
+    __shared__ unsigned int minimums[256];
+    __shared__ unsigned int maximums[256];
+    const unsigned int lane = threadIdx.x;
+    const std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + lane;
+    const unsigned int samples = index < count ? states[index].count : 0;
+    totals[lane] = samples;
+    minimums[lane] = index < count ? samples : 0xffffffffu;
+    maximums[lane] = samples;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (lane < stride) {
+            totals[lane] += totals[lane + stride];
+            minimums[lane] = min(minimums[lane], minimums[lane + stride]);
+            maximums[lane] = max(maximums[lane], maximums[lane + stride]);
+        }
+        __syncthreads();
+    }
+    if (lane == 0) {
+        atomicAdd(&statistics->total, totals[0]);
+        atomicMin(&statistics->minimum, minimums[0]);
+        atomicMax(&statistics->maximum, maximums[0]);
     }
 }
 
@@ -634,12 +742,13 @@ SelectedDevice select_device() {
 }
 
 template <typename SceneOwner>
-void render_image(const std::string& output_path, int sample_count) {
+void render_image(const std::string& output_path, int sample_count, bool adaptive) {
     const SelectedDevice device = select_device();
     std::cout << "Rendering on " << device.properties.name << " ("
               << device.properties.gcnArchName << ")...\n";
     std::cout << "Scene: " << (scene_object_count + 1) / 2 << " spheres, "
-              << scene_object_count / 2 << " tori; " << sample_count << " samples per pixel.\n";
+              << scene_object_count / 2 << " tori; " << (adaptive ? "up to " : "")
+              << sample_count << " samples per pixel (" << (adaptive ? "adaptive" : "fixed") << ").\n";
 
     const std::size_t pixel_count = static_cast<std::size_t>(image_width) * image_height;
     std::unique_ptr<std::uint32_t, HipBufferDeleter> device_pixels;
@@ -648,10 +757,26 @@ void render_image(const std::string& output_path, int sample_count) {
               "Allocating the image on the GPU");
     device_pixels.reset(allocation);
     std::unique_ptr<float3, HipBufferDeleter> device_sums;
-    float3* sums_allocation = nullptr;
-    check_hip(hipMalloc(reinterpret_cast<void**>(&sums_allocation), pixel_count * sizeof(float3)),
-              "Allocating the sample sums on the GPU");
-    device_sums.reset(sums_allocation);
+    std::unique_ptr<AdaptivePixel, HipBufferDeleter> adaptive_states;
+    std::unique_ptr<SampleStatistics, HipBufferDeleter> device_statistics;
+    if (adaptive) {
+        AdaptivePixel* state_allocation = nullptr;
+        check_hip(hipMalloc(reinterpret_cast<void**>(&state_allocation), pixel_count * sizeof(AdaptivePixel)),
+                  "Allocating adaptive sampling state on the GPU");
+        adaptive_states.reset(state_allocation);
+        SampleStatistics* statistics_allocation = nullptr;
+        check_hip(hipMalloc(reinterpret_cast<void**>(&statistics_allocation), sizeof(SampleStatistics)),
+                  "Allocating sample statistics on the GPU");
+        device_statistics.reset(statistics_allocation);
+        const SampleStatistics initial{0, 0xffffffffu, 0};
+        check_hip(hipMemcpy(device_statistics.get(), &initial, sizeof(initial), hipMemcpyHostToDevice),
+                  "Initializing sample statistics");
+    } else {
+        float3* sums_allocation = nullptr;
+        check_hip(hipMalloc(reinterpret_cast<void**>(&sums_allocation), pixel_count * sizeof(float3)),
+                  "Allocating the sample sums on the GPU");
+        device_sums.reset(sums_allocation);
+    }
 
     SceneOwner scene_owner(device.id);
     const TraceScene scene = scene_owner.scene();
@@ -666,22 +791,22 @@ void render_image(const std::string& output_path, int sample_count) {
     check_hip(hipEventRecord(start.value, nullptr), "Starting GPU render timer");
     for (int first_sample = 0; first_sample < sample_count;) {
         const int sample_end = first_sample + std::min(samples_per_batch, sample_count - first_sample);
-        hipLaunchKernelGGL(
-            render_kernel,
-            grid_size,
-            block_size,
-            0,
-            0,
-            device_pixels.get(),
-            device_sums.get(),
-            scene,
-            image_width,
-            image_height,
-            first_sample,
-            sample_end,
-            sample_count);
+        if (adaptive) {
+            hipLaunchKernelGGL(render_adaptive_kernel, grid_size, block_size, 0, 0, device_pixels.get(),
+                               adaptive_states.get(), scene, image_width, image_height,
+                               first_sample, sample_end, sample_count);
+        } else {
+            hipLaunchKernelGGL(render_kernel, grid_size, block_size, 0, 0, device_pixels.get(),
+                               device_sums.get(), scene, image_width, image_height,
+                               first_sample, sample_end, sample_count);
+        }
         check_hip(hipGetLastError(), "Launching the HIP renderer");
         first_sample = sample_end;
+    }
+    if (adaptive) {
+        hipLaunchKernelGGL(summarize_samples, dim3(static_cast<unsigned int>((pixel_count + 255) / 256)),
+                           dim3(256), 0, 0, adaptive_states.get(), pixel_count, device_statistics.get());
+        check_hip(hipGetLastError(), "Launching sample statistics");
     }
     check_hip(hipEventRecord(stop.value, nullptr), "Stopping GPU render timer");
     check_hip(hipEventSynchronize(stop.value), "Waiting for the HIP renderer");
@@ -689,6 +814,14 @@ void render_image(const std::string& output_path, int sample_count) {
     check_hip(hipEventElapsedTime(&render_milliseconds, start.value, stop.value), "Reading GPU render time");
     std::cout << "GPU render time: " << std::fixed << std::setprecision(3)
               << render_milliseconds / 1000.0f << " s\n";
+    if (adaptive) {
+        SampleStatistics statistics{};
+        check_hip(hipMemcpy(&statistics, device_statistics.get(), sizeof(statistics), hipMemcpyDeviceToHost),
+                  "Reading sample statistics");
+        std::cout << "Samples per pixel: min " << statistics.minimum << ", average "
+                  << std::setprecision(1) << static_cast<double>(statistics.total) / pixel_count
+                  << ", max " << statistics.maximum << ".\n";
+    }
 
     std::vector<std::uint32_t> pixels(pixel_count);
     check_hip(
@@ -737,7 +870,7 @@ void render_image(const std::string& output_path, int sample_count) {
         throw std::runtime_error("Failed while writing output image: " + output_path);
     }
     std::cout << "Saved " << output_path << " (" << image_width << 'x' << image_height
-              << ", " << sample_count << " samples per pixel).\n";
+              << ", " << (adaptive ? "up to " : "") << sample_count << " samples per pixel).\n";
 }
 
 }
@@ -745,19 +878,30 @@ void render_image(const std::string& output_path, int sample_count) {
 template <typename SceneOwner>
 int run_demo(int argc, char** argv, const char* default_output_path) {
     try {
-        const std::string output_path = argc > 1 ? argv[1] : default_output_path;
-        if (argc > 3) {
-            throw std::runtime_error("Usage: renderer [output.bmp] [samples-per-pixel]");
-        }
+        std::string output_path = default_output_path;
         int sample_count = samples_per_pixel;
-        if (argc > 2) {
-            const std::string_view input(argv[2]);
-            const auto result = std::from_chars(input.data(), input.data() + input.size(), sample_count);
-            if (result.ec != std::errc{} || result.ptr != input.data() + input.size() || sample_count <= 0) {
-                throw std::runtime_error("Samples per pixel must be a positive integer.");
+        bool adaptive = true;
+        int positional_count = 0;
+        for (int index = 1; index < argc; ++index) {
+            const std::string_view input(argv[index]);
+            if (input == "--fixed") {
+                adaptive = false;
+            } else if (input.substr(0, 2) == "--") {
+                throw std::runtime_error("Unknown option: " + std::string(input));
+            } else if (positional_count == 0) {
+                output_path = input;
+                ++positional_count;
+            } else if (positional_count == 1) {
+                const auto result = std::from_chars(input.data(), input.data() + input.size(), sample_count);
+                if (result.ec != std::errc{} || result.ptr != input.data() + input.size() || sample_count <= 0) {
+                    throw std::runtime_error("Samples per pixel must be a positive integer.");
+                }
+                ++positional_count;
+            } else {
+                throw std::runtime_error("Usage: renderer [output.bmp] [samples-per-pixel] [--fixed]");
             }
         }
-        render_image<SceneOwner>(output_path, sample_count);
+        render_image<SceneOwner>(output_path, sample_count, adaptive);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "HIP RT demo failed: " << error.what() << '\n';

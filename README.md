@@ -8,8 +8,8 @@ native triangles for the meshes. The room is intersected directly.
 The polished sphere next to the crystal reflects it like a mirror, while a
 separate glass sphere shows transparency and refraction.
 
-The renderer produces UHD 4K BMP images (3840 x 2160) with 1024 samples per
-pixel by default. It uses HIP `float3`, direct area-light sampling, indirect
+The renderer produces UHD 4K BMP images (3840 x 2160) with up to 1024 samples
+per pixel by default. It uses HIP `float3`, direct area-light sampling, indirect
 bounces, and metal, glass, diffuse, and energy-conserving Phong-style glossy
 materials. GPU render time is reported separately from setup, image transfer,
 and BMP writing.
@@ -50,19 +50,37 @@ cmake -S . -B build "-DHIPCC_EXECUTABLE=C:\Program Files\AMD\ROCm\7.1\bin\hipcc.
 
 On Linux or WSL, use the same CMake commands with SDK 7.1 installed.
 
-The BMP is saved as `hiprt_demo.bmp` in the current directory. Supply an output
-path and optionally a positive sample count for a quicker preview:
+The BMP is saved as `hiprt_demo.bmp` in the current directory. By default,
+adaptive sampling checks each pixel after batches of eight samples and stops
+when its estimated RGB sampling error is sufficiently low. It uses at least
+64 samples, or 256 for pixels that hit glass, metal or Phong materials on a
+primary ray. The supplied maximum is always respected, even below these minima.
+The renderer reports the actual minimum, average and maximum sample counts.
+
+Supply an output path and optionally a positive maximum sample count for a
+quicker preview:
 
 ```powershell
 .\build\bin\hiprt_demo.exe preview.bmp 32
 ```
+
+For a fixed-sample comparison, add `--fixed` (also usable without a path):
+
+```powershell
+.\build\bin\hiprt_demo.exe reference.bmp 1024 --fixed
+```
+
+Adaptive sampling is a heuristic: rare light paths can be missed and stopping
+based on the same samples can introduce bias. It does not guarantee identical
+quality to a fixed-sample render. GPU render time includes adaptive sampling
+and sample-statistics collection, but not setup, image transfer or BMP writing.
 
 Alternatively, `cmake --build build --target run --config Release` renders
 to `build\hiprt_demo.bmp`. Rendering does not run the tests.
 
 ## Tests
 
-The separate GPU test executable checks mesh and custom-primitive intersections,
+The separate GPU test executable checks adaptive sampling, mesh and custom-primitive intersections,
 room lighting, Phong sampling, reflection, glass refraction, and cat visibility
 without rendering an image:
 

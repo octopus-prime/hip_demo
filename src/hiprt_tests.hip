@@ -194,6 +194,36 @@ __global__ void check_intersections(TraceScene scene, IntersectionCheck* results
                       expected.object_id, actual.object_id, expected.normal, actual.normal};
 }
 
+__global__ void check_adaptive_sampling(unsigned int* failures) {
+    unsigned int failed = 0;
+    AdaptivePixel stable{};
+    for (int i = 0; i < adaptive_min_samples - 1; ++i) {
+        add_adaptive_sample(stable, {1.0f, 0.5f, 0.25f});
+    }
+    if (adaptive_converged(stable)) {
+        failed |= 1;
+    }
+    add_adaptive_sample(stable, {1.0f, 0.5f, 0.25f});
+    if (!adaptive_converged(stable)) {
+        failed |= 2;
+    }
+    stable.specular = true;
+    if (adaptive_converged(stable)) {
+        failed |= 4;
+    }
+    while (stable.count < adaptive_specular_min_samples) {
+        add_adaptive_sample(stable, {1.0f, 0.5f, 0.25f});
+    }
+    if (!adaptive_converged(stable)) {
+        failed |= 8;
+    }
+    add_adaptive_sample(stable, {20.0f, 0.5f, 0.25f});
+    if (adaptive_converged(stable)) {
+        failed |= 16;
+    }
+    *failures = failed;
+}
+
 __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     unsigned int failed = 0;
     Hit hit{};
@@ -220,6 +250,21 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     if (!hit_scene({{-1.65f, 2.0f, -0.9f}, {0.0f, -1.0f, 0.0f}}, hit, scene) ||
         hit.object_id != 0 || hit.material != Material::metal) {
         failed |= 8;
+    }
+    Random marking_random{123456789u};
+    for (const unsigned int index : {0u, 2u, 6u}) {
+        const float3 center = scene_object(index).center;
+        const Ray ray{{center.x, 2.0f, center.z}, {0.0f, -1.0f, 0.0f}};
+        bool specular = false;
+        trace(ray, marking_random, scene, &specular);
+        if (!specular) {
+            failed |= 256;
+        }
+    }
+    bool diffuse_primary = false;
+    trace({origin, {0.0f, 0.0f, -1.0f}}, marking_random, scene, &diffuse_primary);
+    if (diffuse_primary) {
+        failed |= 256;
     }
     Random random{123456789u};
     const float3 illuminated = trace({origin, {0.0f, 0.0f, -1.0f}}, random, scene);
@@ -299,7 +344,84 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     *failures = failed;
 }
 
+void check_adaptive_render(TraceScene scene) {
+    constexpr int width = 17;
+    constexpr int height = 13;
+    constexpr std::size_t count = width * height;
+    auto adaptive_pixels = allocate_device<std::uint32_t>(count, "Allocating adaptive test pixels");
+    auto fixed_pixels = allocate_device<std::uint32_t>(count, "Allocating fixed test pixels");
+    auto states = allocate_device<AdaptivePixel>(count, "Allocating adaptive test state");
+    auto sums = allocate_device<float3>(count, "Allocating fixed test sums");
+    auto device_statistics = allocate_device<SampleStatistics>(1, "Allocating test statistics");
+    std::array<std::uint32_t, count> fixed_at_64{};
+    for (const int cap : {1, 63, 64, 73}) {
+        for (int first = 0; first < cap;) {
+            const int end = first + std::min(samples_per_batch, cap - first);
+            hipLaunchKernelGGL(render_adaptive_kernel, dim3(3, 2), dim3(8, 8), 0, 0,
+                               adaptive_pixels.get(), states.get(), scene, width, height, first, end, cap);
+            check_hip(hipGetLastError(), "Launching adaptive test renderer");
+            hipLaunchKernelGGL(render_kernel, dim3(3, 2), dim3(8, 8), 0, 0,
+                               fixed_pixels.get(), sums.get(), scene, width, height, first, end, cap);
+            check_hip(hipGetLastError(), "Launching fixed test renderer");
+            first = end;
+        }
+        std::array<AdaptivePixel, count> actual_states{};
+        std::array<std::uint32_t, count> actual_pixels{}, expected_pixels{};
+        check_hip(hipMemcpy(actual_states.data(), states.get(), sizeof(actual_states), hipMemcpyDeviceToHost),
+                  "Reading adaptive test state");
+        check_hip(hipMemcpy(actual_pixels.data(), adaptive_pixels.get(), sizeof(actual_pixels), hipMemcpyDeviceToHost),
+                  "Reading adaptive test pixels");
+        check_hip(hipMemcpy(expected_pixels.data(), fixed_pixels.get(), sizeof(expected_pixels), hipMemcpyDeviceToHost),
+                  "Reading fixed test pixels");
+        SampleStatistics expected{0, 0xffffffffu, 0};
+        bool saw_early = false, saw_cap = false;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto& pixel = actual_states[i];
+            if (!pixel.done || pixel.count < static_cast<unsigned int>(std::min(cap, adaptive_min_samples)) ||
+                pixel.count > static_cast<unsigned int>(cap) ||
+                (pixel.count == static_cast<unsigned int>(cap) && actual_pixels[i] != expected_pixels[i]) ||
+                (cap == 73 && pixel.count == 64 && actual_pixels[i] != fixed_at_64[i])) {
+                throw std::runtime_error("Adaptive render check failed at cap " + std::to_string(cap) +
+                                         ", pixel " + std::to_string(i));
+            }
+            saw_early = saw_early || pixel.count < static_cast<unsigned int>(cap);
+            saw_cap = saw_cap || pixel.count == static_cast<unsigned int>(cap);
+            expected.total += pixel.count;
+            expected.minimum = std::min(expected.minimum, pixel.count);
+            expected.maximum = std::max(expected.maximum, pixel.count);
+        }
+        if (cap == 64) {
+            fixed_at_64 = expected_pixels;
+        }
+        if (cap == 73 && (!saw_early || !saw_cap)) {
+            throw std::runtime_error("Adaptive render did not exercise both early completion and the sample cap");
+        }
+        const SampleStatistics initial{0, 0xffffffffu, 0};
+        check_hip(hipMemcpy(device_statistics.get(), &initial, sizeof(initial), hipMemcpyHostToDevice),
+                  "Initializing test statistics");
+        hipLaunchKernelGGL(summarize_samples, dim3(1), dim3(256), 0, 0, states.get(), count, device_statistics.get());
+        check_hip(hipGetLastError(), "Launching test statistics");
+        SampleStatistics actual{};
+        check_hip(hipMemcpy(&actual, device_statistics.get(), sizeof(actual), hipMemcpyDeviceToHost),
+                  "Reading test statistics");
+        if (actual.total != expected.total || actual.minimum != expected.minimum || actual.maximum != expected.maximum) {
+            throw std::runtime_error("Adaptive sample statistics check failed at cap " + std::to_string(cap));
+        }
+    }
+}
+
 void run_checks(TraceScene scene) {
+    auto adaptive_failure = allocate_device<unsigned int>(1, "Allocating adaptive sampling checks");
+    hipLaunchKernelGGL(check_adaptive_sampling, dim3(1), dim3(1), 0, 0, adaptive_failure.get());
+    check_hip(hipGetLastError(), "Launching adaptive sampling checks");
+    unsigned int adaptive_result = 0;
+    check_hip(hipMemcpy(&adaptive_result, adaptive_failure.get(), sizeof(adaptive_result), hipMemcpyDeviceToHost),
+              "Reading adaptive sampling checks");
+    if (adaptive_result != 0) {
+        throw std::runtime_error("Adaptive sampling checks failed (flags " + std::to_string(adaptive_result) + ")");
+    }
+    check_adaptive_render(scene);
+    std::cout << "Adaptive sampling checks passed.\n";
     auto mesh_failures = allocate_device<unsigned int>(mesh_check_count, "Allocating mesh checks");
     hipLaunchKernelGGL(check_mesh, dim3((mesh_check_count + 127) / 128), dim3(128),
                        0, 0, scene, mesh_failures.get());
