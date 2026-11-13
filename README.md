@@ -20,4 +20,4 @@ cmake --build build --config Release
 cmake --build build --target run --config Release
 ```
 
-On Linux or WSL, use the same commands from a shell with the ROCm environment configured. The generated `build/hip_demo.ppm` can be opened in an image viewer that supports PPM.
+On Linux or WSL, use the same commands from a shell with the ROCm environment configured. The executable is generated in `build/bin/` and the generated `build/hip_demo.ppm` can be opened in an image viewer that supports PPM.
