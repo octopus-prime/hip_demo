@@ -14,18 +14,22 @@ struct TraceScene {
     const float4* mesh_vertices;
     unsigned int mesh_triangle_count;
     unsigned int cat_detail_start;
+    bool detail;
 };
 }
 
 #include "renderer_common.h"
 
 // The linked HIP RT device library calls these global dispatch functions.
-__device__ bool intersectFunc(std::uint32_t, std::uint32_t, const hiprtFuncTableHeader&,
+__device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, const hiprtFuncTableHeader& table,
                               const hiprtRay& ray, void*, hiprtHit& result) {
+    const auto* detail_flag = static_cast<const unsigned int*>(
+        table.funcDataSets[geom_type * table.numRayTypes + ray_type].intersectFuncData);
+    const bool detail = detail_flag && *detail_flag != 0;
     const Ray scene_ray{ray.origin, ray.direction};
     Hit hit{};
-    if (result.primID >= scene_object_count ||
-        !hit_primitive(scene_ray, result.primID, ray.maxT, hit) ||
+    if (result.primID >= (detail ? detail_object_count : scene_object_count) ||
+        !hit_primitive(scene_ray, result.primID, ray.maxT, hit, detail) ||
         hit.distance < ray.minT) {
         return false;
     }
@@ -69,7 +73,7 @@ __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene 
         candidate.point = ray.origin + result.t * ray.direction;
         set_face_normal(candidate, ray, result.normal);
         candidate.object_id = result.primID;
-        set_object_material(candidate, result.primID);
+        set_object_material(candidate, result.primID, scene.detail);
         closest_hit = candidate;
         found = true;
     }
@@ -89,7 +93,12 @@ __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) 
         closest_hit.distance = result.t;
         closest_hit.point = ray.origin + result.t * ray.direction;
         set_face_normal(closest_hit, ray, normalize(result.normal));
-        if (result.primID < mesh_triangles.size()) {
+        if (scene.detail) {
+            closest_hit.object_id = scene_object_count + 1;
+            closest_hit.albedo = {0.72f, 0.39f, 0.13f};
+            closest_hit.material = Material::phong;
+            closest_hit.roughness = 0.0f;
+        } else if (result.primID < mesh_triangles.size()) {
             closest_hit.object_id = scene_object_count;
             closest_hit.albedo = {0.10f, 0.65f, 0.72f};
             closest_hit.material = Material::phong;
@@ -125,7 +134,7 @@ void append_triangle(std::vector<float4>& vertices, float3 a, float3 b, float3 c
     vertices.push_back({c.x, c.y, c.z, 0.0f});
 }
 
-void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, MeshUp mesh_up) {
+void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, MeshUp mesh_up, bool detail = false) {
     const PlyMesh mesh = load_ply_mesh(path);
     const auto orient = [mesh_up](const std::array<float, 3>& point) {
         return mesh_up == MeshUp::z
@@ -145,7 +154,9 @@ void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, Mes
             }
         }
     }
-    constexpr std::array<double, 3> available{1.05, 1.55, 0.9};
+    const std::array<double, 3> available = detail ? std::array<double, 3>{1.85, 2.45, 1.55}
+                                                   : std::array<double, 3>{1.05, 1.55, 0.9};
+    const float3 position = detail ? float3{0.0f, 0.0f, -0.65f} : cat_position;
     double scale = std::numeric_limits<double>::infinity();
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const double extent = maximum[axis] - minimum[axis];
@@ -161,9 +172,9 @@ void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, Mes
         for (const auto index : triangle) {
             const auto point = orient(mesh.vertices[index]);
             vertices.push_back({
-                static_cast<float>(cat_position.x + (point[0] - (minimum[0] + maximum[0]) * 0.5) * scale),
+                static_cast<float>(position.x + (point[0] - (minimum[0] + maximum[0]) * 0.5) * scale),
                 static_cast<float>(0.02 + (point[1] - minimum[1]) * scale),
-                static_cast<float>(cat_position.z + (point[2] - (minimum[2] + maximum[2]) * 0.5) * scale),
+                static_cast<float>(position.z + (point[2] - (minimum[2] + maximum[2]) * 0.5) * scale),
                 0.0f});
         }
     }
@@ -290,7 +301,11 @@ struct HiprtFunctionTableOwner {
 
 class HiprtScene {
 public:
-    explicit HiprtScene(int device, const std::string& ply_path = {}, MeshUp mesh_up = MeshUp::y) {
+    explicit HiprtScene(int device, const std::string& ply_path = {}, MeshUp mesh_up = MeshUp::y,
+                        bool detail = false) : detail_(detail) {
+        if (detail && ply_path.empty()) {
+            throw std::runtime_error("The detail scene requires a PLY mesh.");
+        }
         hipCtx_t hip_context = nullptr;
         check_hip(hipCtxGetCurrent(&hip_context), "Reading the current HIP context");
         if (!hip_context) {
@@ -306,12 +321,16 @@ public:
         // Keep the sphere-traced torus tolerance inside the traversal bounds.
         constexpr float margin = 0.01f;
         std::array<float3, scene_object_count * 2> bounds{};
-        for (unsigned int index = 0; index < scene_object_count; ++index) {
-            const SceneObject object = scene_object(index);
-            const float width = (object.sphere ? sphere_radius : torus_major_radius + torus_minor_radius) + margin;
+        const unsigned int object_count = detail ? detail_object_count : scene_object_count;
+        for (unsigned int index = 0; index < object_count; ++index) {
+            const SceneObject object = scene_object(index, detail);
+            const float sphere_size = detail ? detail_sphere_radius : sphere_radius;
+            const float major = detail ? detail_torus_major_radius : torus_major_radius;
+            const float minor = detail ? detail_torus_minor_radius : torus_minor_radius;
+            const float width = (object.sphere ? sphere_size : major + minor) + margin;
             const float absolute_sine = std::abs(object.tilt_sine);
-            const float height = (object.sphere ? sphere_radius : torus_minor_radius + torus_major_radius * absolute_sine) + margin;
-            const float depth = (object.sphere ? sphere_radius : torus_minor_radius + torus_major_radius * object.tilt_cosine) + margin;
+            const float height = (object.sphere ? sphere_size : minor + major * absolute_sine) + margin;
+            const float depth = (object.sphere ? sphere_size : minor + major * object.tilt_cosine) + margin;
             bounds[index * 2] = {object.center.x - width, object.center.y - height, object.center.z - depth};
             bounds[index * 2 + 1] = {object.center.x + width, object.center.y + height, object.center.z + depth};
         }
@@ -323,7 +342,7 @@ public:
         input.type = hiprtPrimitiveTypeAABBList;
         input.geomType = 0;
         input.primitive.aabbList.aabbs = bounds_.get();
-        input.primitive.aabbList.aabbCount = scene_object_count;
+        input.primitive.aabbList.aabbCount = object_count;
         input.primitive.aabbList.aabbStride = 2 * sizeof(float3);
         const hiprtBuildOptions options{};
         std::size_t temporary_size = 0;
@@ -344,12 +363,22 @@ public:
         functions_.context = context_.value;
         check_hiprt(hiprtCreateFuncTable(context_.value, 1, 1, functions_.value),
                     "Creating HIP RT function table");
-        check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, {}),
+        hiprtFuncDataSet function_data{};
+        if (detail) {
+            detail_flag_ = allocate_device<unsigned int>(1, "Allocating detail scene flag");
+            const unsigned int flag = 1;
+            check_hip(hipMemcpy(detail_flag_.get(), &flag, sizeof(flag), hipMemcpyHostToDevice),
+                      "Uploading detail scene flag");
+            function_data.intersectFuncData = detail_flag_.get();
+        }
+        check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, function_data),
                     "Initializing HIP RT function table");
 
         std::vector<float4> vertices;
-        for (const uint3 triangle : mesh_triangles) {
-            append_triangle(vertices, mesh_points[triangle.x], mesh_points[triangle.y], mesh_points[triangle.z]);
+        if (!detail) {
+            for (const uint3 triangle : mesh_triangles) {
+                append_triangle(vertices, mesh_points[triangle.x], mesh_points[triangle.y], mesh_points[triangle.z]);
+            }
         }
         if (ply_path.empty()) {
             append_ellipsoid(vertices, cat_point(0.0f, 0.57f, 0.0f), {0.34f, 0.56f, 0.28f});
@@ -362,7 +391,7 @@ public:
             append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
             append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
         } else {
-            append_ply_mesh(vertices, ply_path, mesh_up);
+            append_ply_mesh(vertices, ply_path, mesh_up, detail);
             cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
         }
         mesh_triangle_count_ = static_cast<unsigned int>(vertices.size() / 3);
@@ -396,18 +425,20 @@ public:
 
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
-                mesh_triangle_count_, cat_detail_start_};
+                mesh_triangle_count_, cat_detail_start_, detail_};
     }
 
 private:
     HiprtContextOwner context_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;
     HiprtGeometryOwner geometry_;
+    std::unique_ptr<unsigned int, HipBufferDeleter> detail_flag_;
     HiprtFunctionTableOwner functions_;
     std::unique_ptr<float4, HipBufferDeleter> mesh_vertices_;
     HiprtGeometryOwner mesh_;
     unsigned int mesh_triangle_count_ = 0;
     unsigned int cat_detail_start_ = 0;
+    bool detail_ = false;
 };
 
 }

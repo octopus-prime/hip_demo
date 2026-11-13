@@ -521,6 +521,83 @@ __global__ void check_ply_scene(TraceScene scene, unsigned int* failure) {
         hit.material != Material::diffuse || fabsf(hit.distance - 0.55f) > 0.001f;
 }
 
+__global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
+    unsigned int failed = 0;
+    for (unsigned int index = 0; index < 2; ++index) {
+        const float3 center = scene_object(index, true).center;
+        const Ray ray{center + float3{0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}};
+        Hit hit{};
+        const Material expected = index == 0 ? Material::metal : Material::glass;
+        if (!hit_custom_objects(ray, hit, scene) || hit.object_id != index || hit.material != expected ||
+            fabsf(hit.distance - (1.0f - detail_sphere_radius)) > 0.001f ||
+            (index == 0 && hit.roughness != 0.0f)) {
+            failed |= 1;
+        }
+    }
+    const Ray torus_ray{{detail_torus_center.x + detail_torus_major_radius,
+                         detail_torus_center.y - 0.5f, detail_torus_center.z}, {0.0f, 1.0f, 0.0f}};
+    Hit torus{}, ceiling{};
+    if (!hit_custom_objects(torus_ray, torus, scene) || torus.object_id != 2 ||
+        torus.material != Material::emissive || !torus.front_face ||
+        !hit_room({{0.0f, 3.8f, 0.0f}, {0.0f, 1.0f, 0.0f}}, 1.0e30f, ceiling, true) ||
+        ceiling.material != Material::diffuse) {
+        failed |= 2;
+    }
+    Random random{123456789u};
+    for (int i = 0; i < 128; ++i) {
+        const LightSample light = sample_torus_light(random);
+        const float radial = sqrtf((light.point.x - detail_torus_center.x) *
+                                    (light.point.x - detail_torus_center.x) +
+                                    (light.point.z - detail_torus_center.z) *
+                                    (light.point.z - detail_torus_center.z));
+        if (fabsf(torus_distance(light.point, detail_torus_center,
+                                 detail_torus_major_radius, detail_torus_minor_radius)) > 0.0001f ||
+            fabsf(dot(light.normal, light.normal) - 1.0f) > 0.0001f ||
+            fabsf(light.area_weight - 4.0f * pi * pi * detail_torus_minor_radius * radial) > 0.0001f) {
+            failed |= 4;
+        }
+    }
+    float3 illumination{};
+    for (int i = 0; i < 128; ++i) {
+        illumination = illumination + trace({{2.0f, 2.0f, 0.0f}, {0.0f, -1.0f, 0.0f}}, random, scene);
+    }
+    if (!(illumination.x > 0.0f && illumination.y > 0.0f && illumination.z > 0.0f)) {
+        failed |= 8;
+    }
+    const float3 glass_center = scene_object(1, true).center;
+    const Ray glass_ray{detail_camera_position,
+                        normalize(glass_center + float3{0.15f, 0.12f, 0.0f} - detail_camera_position)};
+    Hit entry{}, exit{}, behind{};
+    float3 inside_direction{}, outside_direction{};
+    if (!hit_scene(glass_ray, entry, scene) || entry.material != Material::glass || !entry.front_face ||
+        !refract(glass_ray.direction, entry.normal, 1.0f / 1.5f, inside_direction) ||
+        !hit_scene({entry.point - entry.normal * 0.002f, inside_direction}, exit, scene) ||
+        exit.object_id != 1 || exit.front_face ||
+        !refract(inside_direction, exit.normal, 1.5f, outside_direction) ||
+        dot(glass_ray.direction, outside_direction) > 0.999f ||
+        !hit_scene({exit.point - exit.normal * 0.002f, outside_direction}, behind, scene)) {
+        failed |= 16;
+    }
+    bool reflected_light = false;
+    const float3 mirror_center = scene_object(0, true).center;
+    for (int y = -8; y <= 8 && !reflected_light; ++y) {
+        for (int x = -8; x <= 8 && !reflected_light; ++x) {
+            const float3 target = mirror_center + float3{x * 0.075f, y * 0.075f, 0.0f};
+            const Ray ray{detail_camera_position, normalize(target - detail_camera_position)};
+            Hit mirror{}, reflected{};
+            if (hit_scene(ray, mirror, scene) && mirror.material == Material::metal && mirror.object_id == 0 &&
+                hit_scene({mirror.point + mirror.normal * 0.002f, reflect(ray.direction, mirror.normal)},
+                          reflected, scene) && reflected.material == Material::emissive) {
+                reflected_light = true;
+            }
+        }
+    }
+    if (!reflected_light) {
+        failed |= 32;
+    }
+    *failure = failed;
+}
+
 void check_loaded_ply(int device, const char* path, MeshUp up) {
     const HiprtScene loaded(device, path, up);
     if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 1) {
@@ -582,6 +659,20 @@ int main(int argc, char** argv) {
             check_loaded_ply(device.id, argv[1], MeshUp::y);
             check_loaded_ply(device.id, argv[2], MeshUp::z);
             std::cout << "PLY mesh HIP RT intersection checks passed.\n";
+            const HiprtScene detail_scene(device.id, argv[2], MeshUp::z, true);
+            if (detail_scene.scene().mesh_triangle_count != 1) {
+                throw std::runtime_error("Detail scene must contain only the supplied mesh");
+            }
+            auto failure = allocate_device<unsigned int>(1, "Allocating detail scene check");
+            hipLaunchKernelGGL(check_detail_scene, dim3(1), dim3(1), 0, 0, detail_scene.scene(), failure.get());
+            check_hip(hipGetLastError(), "Launching detail scene check");
+            unsigned int result = 0;
+            check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost),
+                      "Reading detail scene check");
+            if (result != 0) {
+                throw std::runtime_error("Detail scene check failed (flags " + std::to_string(result) + ")");
+            }
+            std::cout << "Detail scene, torus light and materials checks passed.\n";
         }
         return 0;
     } catch (const std::exception& error) {

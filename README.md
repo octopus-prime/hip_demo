@@ -2,7 +2,8 @@
 
 A C++23 GPU path tracer rendering a Cornell-style box with red and green walls,
 a ceiling area light, four spheres, three tilted tori, a faceted crystal, and
-a copper-colored low-poly cat.
+a copper-colored low-poly cat. A separate detail scene has a luminous torus,
+mirror and glass spheres, and an imported mesh.
 HIP RT traverses custom bounding-box primitives for the spheres and tori and
 native triangles for the meshes. The room is intersected directly.
 The polished sphere next to the crystal reflects it like a mirror, while a
@@ -107,12 +108,29 @@ No external model assets are included; check their licenses before use.
 Alternatively, `cmake --build build --target run --config Release` renders
 to `build\hiprt_demo.bmp`. Rendering does not run the tests.
 
+### Detail scene
+
+Select the separate scene and supply a PLY mesh. For example, with the
+Z-up Artec dragon downloaded separately:
+
+```powershell
+.\build\bin\hiprt_demo.exe --scene detail --mesh ".\ply\Dragon-ply\Dragon-ply.ply" --mesh-up z
+```
+
+The scene fits the mesh in the center of the Cornell box and places a mirror
+sphere and a glass sphere alongside it. The suspended emissive torus is the
+light source, including for direct lighting, reflections and refractions.
+The mesh uses a glossy Phong material. Its fitting dimensions differ from
+the classic scene, and large meshes need additional GPU memory and render time.
+The original scene remains the default and is also selectable with
+`--scene classic`.
+
 ## Tests
 
 The separate GPU test executable checks adaptive sampling, mesh and custom-primitive intersections,
 room lighting, Phong sampling, reflection, glass refraction, and cat visibility
-without rendering an image. CTest additionally checks PLY parsing and an imported
-mesh intersection:
+without rendering an image. CTest additionally checks PLY parsing, imported
+mesh intersections and the detail scene's materials and torus lighting:
 
 ```powershell
 .\build\bin\hiprt_tests.exe

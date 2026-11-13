@@ -47,6 +47,13 @@ constexpr float light_half_depth = 0.7f;
 constexpr float light_center_z = -0.4f;
 constexpr float phong_exponent = 40.0f;
 constexpr float phong_specular_reflectance = 0.9f;
+constexpr float detail_sphere_radius = 0.72f;
+constexpr float detail_torus_major_radius = 1.05f;
+constexpr float detail_torus_minor_radius = 0.12f;
+constexpr float3 detail_torus_center{0.0f, 3.48f, -0.35f};
+constexpr float3 detail_camera_position{0.0f, 2.1f, 6.8f};
+constexpr float3 detail_camera_target{0.0f, 1.75f, 0.0f};
+constexpr unsigned int detail_object_count = 3;
 
 enum class MeshUp { y, z };
 
@@ -57,7 +64,16 @@ struct SceneObject {
     float tilt_cosine;
 };
 
-__host__ __device__ SceneObject scene_object(unsigned int index) {
+__host__ __device__ SceneObject scene_object(unsigned int index, bool detail = false) {
+    if (detail) {
+        if (index == 0) {
+            return {{-1.68f, detail_sphere_radius, -0.70f}, true, 0.0f, 1.0f};
+        }
+        if (index == 1) {
+            return {{1.55f, detail_sphere_radius, 0.9f}, true, 0.0f, 1.0f};
+        }
+        return {detail_torus_center, false, 0.0f, 1.0f};
+    }
     const bool sphere = index % 2 == 0;
     const unsigned int tilt = index / 2;
     constexpr float sin60 = 0.86602540378f;
@@ -175,8 +191,21 @@ __device__ void set_face_normal(Hit& hit, const Ray& ray, float3 outward_normal)
     hit.normal = hit.front_face ? outward_normal : -outward_normal;
 }
 
-__device__ void set_object_material(Hit& hit, unsigned int object_id) {
+__device__ void set_object_material(Hit& hit, unsigned int object_id, bool detail = false) {
     hit.roughness = 0.0f;
+    if (detail) {
+        if (object_id == 0) {
+            hit.albedo = {0.96f, 0.96f, 0.96f};
+            hit.material = Material::metal;
+        } else if (object_id == 1) {
+            hit.albedo = {0.96f, 0.98f, 1.0f};
+            hit.material = Material::glass;
+        } else {
+            hit.albedo = {1.0f, 1.0f, 1.0f};
+            hit.material = Material::emissive;
+        }
+        return;
+    }
     switch (object_id) {
     case 0:
         hit.albedo = {0.92f, 0.58f, 0.22f};
@@ -237,10 +266,9 @@ __device__ float torus_distance(float3 point, float3 center, float major_radius,
     return sqrtf(ring_distance * ring_distance + local.y * local.y) - minor_radius;
 }
 
-__device__ bool hit_torus(const Ray& ray, float3 center, float maximum_distance, Hit& hit) {
-    constexpr float major_radius = torus_major_radius;
-    constexpr float minor_radius = torus_minor_radius;
-    constexpr float bound_radius = major_radius + minor_radius;
+__device__ bool hit_torus(const Ray& ray, float3 center, float maximum_distance, Hit& hit,
+                          float major_radius = torus_major_radius, float minor_radius = torus_minor_radius) {
+    const float bound_radius = major_radius + minor_radius;
 
     const float3 bound_offset = ray.origin - center;
     const float half_b = dot(bound_offset, ray.direction);
@@ -289,17 +317,20 @@ __device__ bool hit_torus(const Ray& ray, float3 center, float maximum_distance,
     return true;
 }
 
-__device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maximum_distance, Hit& hit) {
-    const SceneObject object = scene_object(object_id);
+__device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maximum_distance, Hit& hit,
+                              bool detail = false) {
+    const SceneObject object = scene_object(object_id, detail);
     bool found;
     if (object.sphere) {
-        found = hit_sphere(ray, object.center, sphere_radius, maximum_distance, hit);
+        found = hit_sphere(ray, object.center, detail ? detail_sphere_radius : sphere_radius, maximum_distance, hit);
     } else {
         const Ray local_ray{
             rotate_x(ray.origin - object.center, -object.tilt_sine, object.tilt_cosine),
             rotate_x(ray.direction, -object.tilt_sine, object.tilt_cosine),
         };
-        found = hit_torus(local_ray, {0.0f, 0.0f, 0.0f}, maximum_distance, hit);
+        found = hit_torus(local_ray, {0.0f, 0.0f, 0.0f}, maximum_distance, hit,
+                          detail ? detail_torus_major_radius : torus_major_radius,
+                          detail ? detail_torus_minor_radius : torus_minor_radius);
         if (found) {
             hit.point = ray.origin + hit.distance * ray.direction;
             hit.normal = rotate_x(hit.normal, object.tilt_sine, object.tilt_cosine);
@@ -307,12 +338,12 @@ __device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maxi
     }
     if (found) {
         hit.object_id = object_id;
-        set_object_material(hit, object_id);
+        set_object_material(hit, object_id, detail);
     }
     return found;
 }
 
-__device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit) {
+__device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool detail = false) {
     bool found = false;
     for (int wall = 0; wall < 5; ++wall) {
         float origin, direction, position;
@@ -352,7 +383,7 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit) {
         set_face_normal(hit, ray, normal);
         hit.albedo = wall == 3 ? float3{0.72f, 0.10f, 0.10f} :
             wall == 4 ? float3{0.10f, 0.65f, 0.16f} : float3{0.75f, 0.75f, 0.75f};
-        hit.material = wall == 1 && fabsf(point.x) <= light_half_width &&
+        hit.material = !detail && wall == 1 && fabsf(point.x) <= light_half_width &&
             fabsf(point.z - light_center_z) <= light_half_depth ? Material::emissive : Material::diffuse;
         hit.roughness = 1.0f;
         found = true;
@@ -367,15 +398,32 @@ __device__ bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene scene) {
     bool found = hit_objects(ray, closest_hit, scene);
     const float closest_distance = found ? closest_hit.distance : 1.0e30f;
     Hit candidate{};
-    if (hit_room(ray, closest_distance, candidate)) {
+    if (hit_room(ray, closest_distance, candidate, scene.detail)) {
         closest_hit = candidate;
         found = true;
     }
     return found;
 }
 
-__device__ float3 light_radiance() {
-    return {12.0f, 11.5f, 10.5f};
+__device__ float3 light_radiance(bool detail = false) {
+    return detail ? float3{24.0f, 23.0f, 21.0f} : float3{12.0f, 11.5f, 10.5f};
+}
+
+struct LightSample {
+    float3 point;
+    float3 normal;
+    float area_weight;
+};
+
+__device__ LightSample sample_torus_light(Random& random) {
+    const float around = 2.0f * pi * random.next();
+    const float tube = 2.0f * pi * random.next();
+    const float radial = detail_torus_major_radius + detail_torus_minor_radius * cosf(tube);
+    const float3 normal{cosf(tube) * cosf(around), sinf(tube), cosf(tube) * sinf(around)};
+    return {detail_torus_center + float3{radial * cosf(around),
+                                         detail_torus_minor_radius * sinf(tube),
+                                         radial * sinf(around)},
+            normal, 4.0f * pi * pi * detail_torus_minor_radius * radial};
 }
 
 __device__ float3 sample_phong_lobe(float3 axis, Random& random) {
@@ -412,7 +460,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
         }
         if (hit.material == Material::emissive) {
             if (include_emission && hit.front_face) {
-                radiance = radiance + throughput * light_radiance();
+                radiance = radiance + throughput * light_radiance(scene.detail);
             }
             break;
         } else if (hit.material == Material::metal) {
@@ -440,20 +488,29 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
                 throughput = throughput * hit.albedo;
             }
         } else {
-            const float3 light_point{(2.0f * random.next() - 1.0f) * light_half_width,
-                                     room_height,
-                                     light_center_z + (2.0f * random.next() - 1.0f) * light_half_depth};
+            LightSample light{};
+            if (scene.detail) {
+                light = sample_torus_light(random);
+            } else {
+                light = {{(2.0f * random.next() - 1.0f) * light_half_width,
+                          room_height,
+                          light_center_z + (2.0f * random.next() - 1.0f) * light_half_depth},
+                         {0.0f, -1.0f, 0.0f}, 4.0f * light_half_width * light_half_depth};
+            }
             const float3 shadow_origin = hit.point + hit.normal * 0.002f;
-            const float3 to_light = light_point - shadow_origin;
+            const float3 to_light = light.point - shadow_origin;
             const float distance_squared = dot(to_light, to_light);
             const float distance = sqrtf(distance_squared);
             const float3 light_direction = to_light / distance;
             const float cosine = fmaxf(0.0f, dot(hit.normal, light_direction));
-            const float light_cosine = fmaxf(0.0f, light_direction.y);
+            const float light_cosine = fmaxf(0.0f, dot(light.normal, -light_direction));
             Hit shadow_hit{};
+            // The torus intersection is sphere-traced with a finite surface tolerance.
+            const float shadow_tolerance = scene.detail
+                ? fminf(0.02f, 0.0025f / fmaxf(light_cosine, 0.1f)) : 0.001f;
             if (cosine > 0.0f && light_cosine > 0.0f &&
                 (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
-                 shadow_hit.distance >= distance - 0.001f)) {
+                 shadow_hit.distance >= distance - shadow_tolerance)) {
                 float3 scattering = hit.albedo * (cosine / pi);
                 if (hit.material == Material::phong) {
                     const float3 reflected = normalize(reflect(ray.direction, hit.normal));
@@ -463,9 +520,8 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
                     scattering = 0.5f * (scattering + float3{1.0f, 1.0f, 1.0f} *
                         (phong_specular_reflectance * cosine * lobe));
                 }
-                const float light_area = 4.0f * light_half_width * light_half_depth;
-                radiance = radiance + throughput * scattering * light_radiance() *
-                    (light_cosine * light_area / distance_squared);
+                radiance = radiance + throughput * scattering * light_radiance(scene.detail) *
+                    (light_cosine * light.area_weight / distance_squared);
             }
             include_emission = false;
             if (hit.material == Material::phong && random.next() < 0.5f) {
@@ -536,7 +592,7 @@ __device__ std::uint32_t encode_color(float3 color) {
 
 __device__ float3 sample_pixel(int x, int y, int width, int height, int sample, float3 forward, float3 right,
                                float3 up, TraceScene scene, bool* specular_primary = nullptr) {
-    constexpr float half_view_height = 0.41421356f;
+    const float half_view_height = scene.detail ? 0.35f : 0.41421356f;
     constexpr float aspect_ratio = static_cast<float>(image_width) / image_height;
     const std::uint32_t seed = static_cast<std::uint32_t>(
         (x + y * width + 1) * 747796405u + (sample + 1) * 2891336453u);
@@ -546,7 +602,7 @@ __device__ float3 sample_pixel(int x, int y, int width, int height, int sample, 
     const float v = (1.0f - 2.0f * (static_cast<float>(y) + random.next()) / height) *
         half_view_height;
     const float3 direction = normalize(forward + u * right + v * up);
-    return trace({camera_position, direction}, random, scene, specular_primary);
+    return trace({scene.detail ? detail_camera_position : camera_position, direction}, random, scene, specular_primary);
 }
 
 __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene scene, int width, int height,
@@ -557,7 +613,8 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
         return;
     }
 
-    const float3 forward = normalize(camera_target - camera_position);
+    const float3 forward = normalize(scene.detail ? detail_camera_target - detail_camera_position
+                                                  : camera_target - camera_position);
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
     const int pixel_index = x + y * width;
@@ -586,7 +643,8 @@ __global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* sta
     if (pixel.done) {
         return;
     }
-    const float3 forward = normalize(camera_target - camera_position);
+    const float3 forward = normalize(scene.detail ? detail_camera_target - detail_camera_position
+                                                  : camera_target - camera_position);
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
     for (int sample = first_sample; sample < sample_end; ++sample) {
@@ -746,12 +804,13 @@ SelectedDevice select_device() {
 
 template <typename SceneOwner>
 void render_image(const std::string& output_path, int sample_count, bool adaptive, const std::string& ply_path,
-                  MeshUp mesh_up) {
+                  MeshUp mesh_up, bool detail) {
     const SelectedDevice device = select_device();
     std::cout << "Rendering on " << device.properties.name << " ("
               << device.properties.gcnArchName << ")...\n";
-    std::cout << "Scene: " << (scene_object_count + 1) / 2 << " spheres, "
-              << scene_object_count / 2 << " tori; " << (adaptive ? "up to " : "")
+    std::cout << "Scene: " << (detail ? "detail (2 spheres, torus light, mesh)" :
+                                             "classic (4 spheres, 3 tori)") << "; "
+              << (adaptive ? "up to " : "")
               << sample_count << " samples per pixel (" << (adaptive ? "adaptive" : "fixed") << ").\n";
 
     const std::size_t pixel_count = static_cast<std::size_t>(image_width) * image_height;
@@ -782,7 +841,7 @@ void render_image(const std::string& output_path, int sample_count, bool adaptiv
         device_sums.reset(sums_allocation);
     }
 
-    SceneOwner scene_owner(device.id, ply_path, mesh_up);
+    SceneOwner scene_owner(device.id, ply_path, mesh_up, detail);
     const TraceScene scene = scene_owner.scene();
 
     const dim3 block_size{16, 16};
@@ -888,11 +947,26 @@ int run_demo(int argc, char** argv, const char* default_output_path) {
         std::string ply_path;
         MeshUp mesh_up = MeshUp::y;
         bool mesh_up_specified = false;
+        bool detail = false;
+        bool scene_specified = false;
         int positional_count = 0;
         for (int index = 1; index < argc; ++index) {
             const std::string_view input(argv[index]);
             if (input == "--fixed") {
                 adaptive = false;
+            } else if (input == "--scene") {
+                if (scene_specified || index + 1 >= argc) {
+                    throw std::runtime_error("--scene requires one name: classic or detail.");
+                }
+                const std::string_view name(argv[++index]);
+                if (name == "classic") {
+                    detail = false;
+                } else if (name == "detail") {
+                    detail = true;
+                } else {
+                    throw std::runtime_error("--scene requires one name: classic or detail.");
+                }
+                scene_specified = true;
             } else if (input == "--mesh") {
                 if (!ply_path.empty() || index + 1 >= argc ||
                     std::string_view(argv[index + 1]).substr(0, 2) == "--" ||
@@ -926,13 +1000,17 @@ int run_demo(int argc, char** argv, const char* default_output_path) {
                 ++positional_count;
             } else {
                 throw std::runtime_error(
-                    "Usage: renderer [output.bmp] [samples-per-pixel] [--fixed] [--mesh file.ply] [--mesh-up y|z]");
+                    "Usage: renderer [output.bmp] [samples-per-pixel] [--fixed] [--scene classic|detail] "
+                    "[--mesh file.ply] [--mesh-up y|z]");
             }
         }
         if (mesh_up_specified && ply_path.empty()) {
             throw std::runtime_error("--mesh-up requires --mesh.");
         }
-        render_image<SceneOwner>(output_path, sample_count, adaptive, ply_path, mesh_up);
+        if (detail && ply_path.empty()) {
+            throw std::runtime_error("The detail scene requires --mesh with a PLY file.");
+        }
+        render_image<SceneOwner>(output_path, sample_count, adaptive, ply_path, mesh_up, detail);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "HIP RT demo failed: " << error.what() << '\n';
