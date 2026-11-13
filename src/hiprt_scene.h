@@ -10,6 +10,8 @@ struct TraceScene {
     hiprtFuncTable functions;
     hiprtGeometry mesh;
     const float4* mesh_vertices;
+    unsigned int mesh_triangle_count;
+    unsigned int cat_detail_start;
 };
 }
 
@@ -36,6 +38,16 @@ __device__ bool filterFunc(std::uint32_t, std::uint32_t, const hiprtFuncTableHea
 }
 
 namespace {
+
+constexpr std::array<float3, 6> mesh_points{{
+    {0.0f, 1.35f, 1.45f}, {0.50f, 0.50f, 1.45f}, {0.0f, 0.50f, 1.95f},
+    {-0.50f, 0.50f, 1.45f}, {0.0f, 0.50f, 0.95f}, {0.0f, 0.02f, 1.45f},
+}};
+constexpr std::array<uint3, 8> mesh_triangles{{
+    {0, 2, 1}, {0, 3, 2}, {0, 4, 3}, {0, 1, 4},
+    {5, 1, 2}, {5, 2, 3}, {5, 3, 4}, {5, 4, 1},
+}};
+constexpr float3 cat_position{1.85f, 0.0f, 1.75f};
 
 __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
     bool found = false;
@@ -75,23 +87,22 @@ __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) 
         closest_hit.distance = result.t;
         closest_hit.point = ray.origin + result.t * ray.direction;
         set_face_normal(closest_hit, ray, normalize(result.normal));
-        closest_hit.object_id = scene_object_count;
-        closest_hit.albedo = {0.10f, 0.65f, 0.72f};
-        closest_hit.material = Material::phong;
-        closest_hit.roughness = 0.0f;
+        if (result.primID < mesh_triangles.size()) {
+            closest_hit.object_id = scene_object_count;
+            closest_hit.albedo = {0.10f, 0.65f, 0.72f};
+            closest_hit.material = Material::phong;
+            closest_hit.roughness = 0.0f;
+        } else {
+            closest_hit.object_id = scene_object_count + 1;
+            const bool detail = result.primID >= scene.cat_detail_start;
+            closest_hit.albedo = detail ? float3{0.025f, 0.018f, 0.012f} : float3{0.78f, 0.36f, 0.16f};
+            closest_hit.material = Material::diffuse;
+            closest_hit.roughness = 1.0f;
+        }
         found = true;
     }
     return found;
 }
-
-constexpr std::array<float3, 6> mesh_points{{
-    {0.0f, 1.35f, 1.45f}, {0.50f, 0.50f, 1.45f}, {0.0f, 0.50f, 1.95f},
-    {-0.50f, 0.50f, 1.45f}, {0.0f, 0.50f, 0.95f}, {0.0f, 0.02f, 1.45f},
-}};
-constexpr std::array<uint3, 8> mesh_triangles{{
-    {0, 2, 1}, {0, 3, 2}, {0, 4, 3}, {0, 1, 4},
-    {5, 1, 2}, {5, 2, 3}, {5, 3, 4}, {5, 4, 1},
-}};
 
 void check_hiprt(hiprtError result, std::string_view operation) {
     if (result != hiprtSuccess) {
@@ -104,6 +115,91 @@ std::unique_ptr<T, HipBufferDeleter> allocate_device(std::size_t count, std::str
     T* pointer = nullptr;
     check_hip(hipMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T)), operation);
     return std::unique_ptr<T, HipBufferDeleter>(pointer);
+}
+
+void append_triangle(std::vector<float4>& vertices, float3 a, float3 b, float3 c) {
+    vertices.push_back({a.x, a.y, a.z, 0.0f});
+    vertices.push_back({b.x, b.y, b.z, 0.0f});
+    vertices.push_back({c.x, c.y, c.z, 0.0f});
+}
+
+void append_ellipsoid(std::vector<float4>& vertices, float3 center, float3 radius) {
+    constexpr float diagonal = 0.70710678f;
+    constexpr std::array<float2, 8> ring{{
+        {1.0f, 0.0f}, {diagonal, diagonal}, {0.0f, 1.0f}, {-diagonal, diagonal},
+        {-1.0f, 0.0f}, {-diagonal, -diagonal}, {0.0f, -1.0f}, {diagonal, -diagonal},
+    }};
+    std::array<std::array<float3, 8>, 3> rings{};
+    for (std::size_t row = 0; row < rings.size(); ++row) {
+        const float y = row == 0 ? diagonal : row == 1 ? 0.0f : -diagonal;
+        const float scale = row == 1 ? 1.0f : diagonal;
+        for (std::size_t index = 0; index < ring.size(); ++index) {
+            rings[row][index] = {center.x + radius.x * scale * ring[index].x,
+                                 center.y + radius.y * y,
+                                 center.z + radius.z * scale * ring[index].y};
+        }
+    }
+    const float3 top{center.x, center.y + radius.y, center.z};
+    const float3 bottom{center.x, center.y - radius.y, center.z};
+    for (std::size_t index = 0; index < ring.size(); ++index) {
+        const std::size_t next = (index + 1) % ring.size();
+        append_triangle(vertices, top, rings[0][next], rings[0][index]);
+        for (std::size_t row = 0; row + 1 < rings.size(); ++row) {
+            append_triangle(vertices, rings[row][index], rings[row][next], rings[row + 1][index]);
+            append_triangle(vertices, rings[row][next], rings[row + 1][next], rings[row + 1][index]);
+        }
+        append_triangle(vertices, rings[2][index], rings[2][next], bottom);
+    }
+}
+
+float3 cat_point(float x, float y, float z) {
+    return {cat_position.x + x, y, cat_position.z + z};
+}
+
+void append_ear(std::vector<float4>& vertices, float side) {
+    const float3 inner = cat_point(side * 0.07f, 1.37f, 0.13f);
+    const float3 outer = cat_point(side * 0.27f, 1.32f, 0.10f);
+    const float3 back = cat_point(side * 0.19f, 1.35f, -0.10f);
+    const float3 tip = cat_point(side * 0.28f, 1.72f, 0.02f);
+    append_triangle(vertices, inner, outer, tip);
+    append_triangle(vertices, outer, back, tip);
+    append_triangle(vertices, back, inner, tip);
+    append_triangle(vertices, inner, back, outer);
+}
+
+void append_tail(std::vector<float4>& vertices) {
+    constexpr std::array<float3, 5> points{{
+        {0.23f, 0.16f, 0.0f}, {0.45f, 0.18f, 0.0f}, {0.61f, 0.35f, 0.0f},
+        {0.63f, 0.59f, 0.0f}, {0.53f, 0.72f, 0.0f},
+    }};
+    constexpr std::array<float2, 6> ring{{
+        {1.0f, 0.0f}, {0.5f, 0.8660254f}, {-0.5f, 0.8660254f},
+        {-1.0f, 0.0f}, {-0.5f, -0.8660254f}, {0.5f, -0.8660254f},
+    }};
+    std::array<std::array<float3, 6>, points.size()> rings{};
+    for (std::size_t index = 0; index < points.size(); ++index) {
+        const float3 before = points[index == 0 ? 0 : index - 1];
+        const float3 after = points[index + 1 == points.size() ? index : index + 1];
+        const float dx = after.x - before.x;
+        const float dy = after.y - before.y;
+        const float length = std::sqrt(dx * dx + dy * dy);
+        for (std::size_t side = 0; side < ring.size(); ++side) {
+            rings[index][side] = cat_point(points[index].x - 0.075f * dy / length * ring[side].x,
+                                           points[index].y + 0.075f * dx / length * ring[side].x,
+                                           points[index].z + 0.075f * ring[side].y);
+        }
+    }
+    for (std::size_t side = 0; side < ring.size(); ++side) {
+        const std::size_t next = (side + 1) % ring.size();
+        append_triangle(vertices, cat_point(points.front().x, points.front().y, points.front().z),
+                        rings.front()[side], rings.front()[next]);
+        for (std::size_t index = 0; index + 1 < points.size(); ++index) {
+            append_triangle(vertices, rings[index][side], rings[index + 1][side], rings[index][next]);
+            append_triangle(vertices, rings[index][next], rings[index + 1][side], rings[index + 1][next]);
+        }
+        append_triangle(vertices, cat_point(points.back().x, points.back().y, points.back().z),
+                        rings.back()[next], rings.back()[side]);
+    }
 }
 
 struct HiprtContextOwner {
@@ -203,25 +299,29 @@ public:
         check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, {}),
                     "Initializing HIP RT function table");
 
-        std::array<float4, mesh_triangles.size() * 3> vertices{};
-        for (std::size_t index = 0; index < mesh_triangles.size(); ++index) {
-            const uint3 triangle = mesh_triangles[index];
-            const float3 a = mesh_points[triangle.x];
-            const float3 b = mesh_points[triangle.y];
-            const float3 c = mesh_points[triangle.z];
-            vertices[index * 3] = {a.x, a.y, a.z, 0.0f};
-            vertices[index * 3 + 1] = {b.x, b.y, b.z, 0.0f};
-            vertices[index * 3 + 2] = {c.x, c.y, c.z, 0.0f};
+        std::vector<float4> vertices;
+        for (const uint3 triangle : mesh_triangles) {
+            append_triangle(vertices, mesh_points[triangle.x], mesh_points[triangle.y], mesh_points[triangle.z]);
         }
+        append_ellipsoid(vertices, cat_point(0.0f, 0.57f, 0.0f), {0.34f, 0.56f, 0.28f});
+        append_ellipsoid(vertices, cat_point(0.0f, 1.20f, 0.0f), {0.31f, 0.31f, 0.26f});
+        append_ear(vertices, -1.0f);
+        append_ear(vertices, 1.0f);
+        append_tail(vertices);
+        cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
+        append_ellipsoid(vertices, cat_point(-0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
+        append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
+        append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
+        mesh_triangle_count_ = static_cast<unsigned int>(vertices.size() / 3);
         mesh_vertices_ = allocate_device<float4>(vertices.size(), "Allocating mesh vertices");
-        check_hip(hipMemcpy(mesh_vertices_.get(), vertices.data(), sizeof(vertices), hipMemcpyHostToDevice),
+        check_hip(hipMemcpy(mesh_vertices_.get(), vertices.data(), vertices.size() * sizeof(float4), hipMemcpyHostToDevice),
                   "Uploading mesh vertices");
         hiprtGeometryBuildInput mesh_input{};
         mesh_input.type = hiprtPrimitiveTypeTriangleMesh;
         mesh_input.primitive.triangleMesh.vertices = mesh_vertices_.get();
         mesh_input.primitive.triangleMesh.vertexCount = static_cast<std::uint32_t>(vertices.size());
         mesh_input.primitive.triangleMesh.vertexStride = sizeof(float4);
-        mesh_input.primitive.triangleMesh.triangleCount = static_cast<std::uint32_t>(mesh_triangles.size());
+        mesh_input.primitive.triangleMesh.triangleCount = mesh_triangle_count_;
         hiprtBuildOptions mesh_options{};
         mesh_options.buildFlags = hiprtBuildFlagBitDisableTrianglePairing;
         std::size_t mesh_temporary_size = 0;
@@ -242,7 +342,8 @@ public:
     }
 
     TraceScene scene() const {
-        return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get()};
+        return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
+                mesh_triangle_count_, cat_detail_start_};
     }
 
 private:
@@ -252,6 +353,8 @@ private:
     HiprtFunctionTableOwner functions_;
     std::unique_ptr<float4, HipBufferDeleter> mesh_vertices_;
     HiprtGeometryOwner mesh_;
+    unsigned int mesh_triangle_count_ = 0;
+    unsigned int cat_detail_start_ = 0;
 };
 
 }

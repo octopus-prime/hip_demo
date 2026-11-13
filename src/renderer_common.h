@@ -28,7 +28,7 @@ constexpr int samples_per_pixel = 1024;
 constexpr int samples_per_batch = 8;
 constexpr int maximum_bounces = 8;
 constexpr float pi = 3.14159265359f;
-constexpr unsigned int scene_object_count = 6;
+constexpr unsigned int scene_object_count = 7;
 constexpr float sphere_radius = 0.48f;
 constexpr float torus_major_radius = 0.43f;
 constexpr float torus_minor_radius = 0.14f;
@@ -66,6 +66,7 @@ __host__ __device__ SceneObject scene_object(unsigned int index) {
     case 3: x = 1.90f; break;
     case 4: x = -1.05f; z = 0.85f; break;
     case 5: x = 0.75f; z = 0.85f; break;
+    case 6: x = -2.05f; z = 0.85f; break;
     }
     return {{x, sphere ? sphere_radius : torus_minor_radius + torus_major_radius * absolute_sine, z},
             sphere, sine, cosine};
@@ -176,7 +177,7 @@ __device__ void set_object_material(Hit& hit, unsigned int object_id) {
         hit.roughness = 0.08f;
         break;
     case 1:
-    case 4:
+    case 6:
         hit.albedo = {0.96f, 0.98f, 1.0f};
         hit.material = Material::glass;
         break;
@@ -187,6 +188,10 @@ __device__ void set_object_material(Hit& hit, unsigned int object_id) {
     case 3:
         hit.albedo = {0.85f, 0.48f, 0.08f};
         hit.material = Material::phong;
+        break;
+    case 4:
+        hit.albedo = {0.96f, 0.96f, 0.96f};
+        hit.material = Material::metal;
         break;
     default:
         hit.albedo = {0.55f, 0.15f, 0.55f};
@@ -633,7 +638,7 @@ void render_image(const std::string& output_path, int sample_count) {
     const SelectedDevice device = select_device();
     std::cout << "Rendering on " << device.properties.name << " ("
               << device.properties.gcnArchName << ")...\n";
-    std::cout << "Scene: " << scene_object_count / 2 << " spheres, "
+    std::cout << "Scene: " << (scene_object_count + 1) / 2 << " spheres, "
               << scene_object_count / 2 << " tori; " << sample_count << " samples per pixel.\n";
 
     const std::size_t pixel_count = static_cast<std::size_t>(image_width) * image_height;

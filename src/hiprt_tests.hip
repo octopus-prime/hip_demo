@@ -25,10 +25,11 @@ __device__ float3 mesh_vertex(const float4* vertices, unsigned int index) {
 }
 
 // Independent reference for the mesh intersection checks.
-__device__ bool hit_reference_mesh(const Ray& ray, const float4* vertices, float maximum_distance,
+__device__ bool hit_reference_mesh(const Ray& ray, const float4* vertices, unsigned int triangle_count,
+                                   float maximum_distance,
                                    float& distance, unsigned int& primitive, float3& normal) {
     bool found = false;
-    for (unsigned int index = 0; index < mesh_triangles.size(); ++index) {
+    for (unsigned int index = 0; index < triangle_count; ++index) {
         const float3 a = mesh_vertex(vertices, index * 3);
         const float3 edge1 = mesh_vertex(vertices, index * 3 + 1) - a;
         const float3 edge2 = mesh_vertex(vertices, index * 3 + 2) - a;
@@ -91,7 +92,7 @@ __global__ void check_mesh(TraceScene scene, unsigned int* failures) {
     float expected_distance = 0.0f;
     unsigned int expected_primitive = 0;
     float3 expected_normal{};
-    const bool expected = hit_reference_mesh(ray, scene.mesh_vertices, maximum_distance,
+    const bool expected = hit_reference_mesh(ray, scene.mesh_vertices, scene.mesh_triangle_count, maximum_distance,
                                               expected_distance, expected_primitive, expected_normal);
     hiprtRay traversal_ray{};
     traversal_ray.origin = ray.origin;
@@ -119,8 +120,11 @@ __global__ void check_mesh(TraceScene scene, unsigned int* failures) {
         const bool combined_hit = hit_objects(ray, combined, scene);
         const bool mesh_closest = expected && (!custom_hit || expected_distance < custom.distance);
         const bool front_face = dot(ray.direction, expected_normal) < 0.0f;
+        const bool crystal = expected_primitive < mesh_triangles.size();
+        const Material material = crystal ? Material::phong : Material::diffuse;
         if (combined_hit != (expected || custom_hit) ||
-            (mesh_closest && (combined.object_id != scene_object_count || combined.material != Material::phong ||
+            (mesh_closest && (combined.object_id != scene_object_count + (crystal ? 0 : 1) ||
+                              combined.material != material ||
                               combined.front_face != front_face ||
                               !(fabsf(dot(combined.normal, expected_normal)) > 0.999f) ||
                               fabsf(combined.distance - expected_distance) > 0.0001f)) ||
@@ -234,6 +238,64 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     if (fabsf(cosine_sum / 2048.0f - expected_cosine) > 0.005f) {
         failed |= 16;
     }
+    const float3 forward = normalize(camera_target - camera_position);
+    const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
+    const float3 up = cross(right, forward);
+    for (int x = 1650; x <= 1670; x += 10) {
+        const float u = (2.0f * (x + 0.5f) / image_width - 1.0f) *
+            (static_cast<float>(image_width) / image_height) * 0.41421356f;
+        const float v = (1.0f - 2.0f * 1520.5f / image_height) * 0.41421356f;
+        const Ray camera_ray{camera_position, normalize(forward + u * right + v * up)};
+        Hit sphere{}, reflected_hit{};
+        if (!hit_scene(camera_ray, sphere, scene) || sphere.object_id != 4 ||
+            sphere.material != Material::metal || sphere.roughness != 0.0f) {
+            failed |= 32;
+            continue;
+        }
+        const Ray reflected_ray{sphere.point + sphere.normal * 0.002f,
+                                reflect(camera_ray.direction, sphere.normal)};
+        if (!hit_scene(reflected_ray, reflected_hit, scene) ||
+            reflected_hit.object_id != scene_object_count) {
+            failed |= 32;
+        }
+    }
+    const Ray glass_ray{camera_position,
+                        normalize(scene_object(6).center + float3{0.15f, 0.12f, 0.0f} - camera_position)};
+    Hit entry{}, exit{}, behind{};
+    float3 inside_direction{}, outside_direction{};
+    if (!hit_scene(glass_ray, entry, scene) || entry.object_id != 6 ||
+        entry.material != Material::glass || !entry.front_face ||
+        !refract(glass_ray.direction, entry.normal, 1.0f / 1.5f, inside_direction) ||
+        !hit_scene({entry.point - entry.normal * 0.002f, inside_direction}, exit, scene) ||
+        exit.object_id != 6 || exit.front_face ||
+        !refract(inside_direction, exit.normal, 1.5f, outside_direction) ||
+        dot(glass_ray.direction, outside_direction) > 0.999f ||
+        !hit_scene({exit.point - exit.normal * 0.002f, outside_direction}, behind, scene)) {
+        failed |= 64;
+    }
+    constexpr std::array<float3, 4> cat_targets{{
+        {cat_position.x, 0.55f, cat_position.z},
+        {cat_position.x, 1.20f, cat_position.z},
+        {cat_position.x + 0.23f, 1.55f, cat_position.z},
+        {cat_position.x + 0.63f, 0.59f, cat_position.z},
+    }};
+    for (const float3 target : cat_targets) {
+        const Ray ray{camera_position, normalize(target - camera_position)};
+        Hit cat_hit{};
+        if (!hit_scene(ray, cat_hit, scene) || cat_hit.object_id != scene_object_count + 1 ||
+            cat_hit.material != Material::diffuse || cat_hit.albedo.x < 0.5f) {
+            failed |= 128;
+        }
+    }
+    for (const float offset : {-0.13f, 0.13f}) {
+        const float3 target{cat_position.x + offset, 1.25f, cat_position.z + 0.25f};
+        const Ray ray{camera_position, normalize(target - camera_position)};
+        Hit eye{};
+        if (!hit_scene(ray, eye, scene) || eye.object_id != scene_object_count + 1 ||
+            eye.material != Material::diffuse || eye.albedo.x > 0.1f) {
+            failed |= 128;
+        }
+    }
     *failures = failed;
 }
 
@@ -251,7 +313,7 @@ void run_checks(TraceScene scene) {
                                      std::to_string(index) + " (flags " + std::to_string(mesh_results[index]) + ")");
         }
     }
-    std::cout << "HIP RT triangle mesh intersection checks passed (" << mesh_triangles.size()
+    std::cout << "HIP RT triangle mesh intersection checks passed (" << scene.mesh_triangle_count
               << " triangles).\n";
     auto device_results = allocate_device<IntersectionCheck>(intersection_check_count, "Allocating intersection checks");
     hipLaunchKernelGGL(check_intersections, dim3((intersection_check_count + 127) / 128),
@@ -262,7 +324,7 @@ void run_checks(TraceScene scene) {
               "Reading HIP RT intersection checks");
     constexpr std::array<Material, scene_object_count> expected_materials{
         Material::metal, Material::glass, Material::phong,
-        Material::phong, Material::glass, Material::diffuse};
+        Material::phong, Material::metal, Material::diffuse, Material::glass};
     for (std::size_t index = 0; index < results.size(); ++index) {
         const IntersectionCheck& result = results[index];
         if ((index < scene_object_count && (!result.expected_hit || result.expected_object_id != index ||
@@ -319,7 +381,7 @@ void run_checks(TraceScene scene) {
     if (failures != 0) {
         throw std::runtime_error("Cornell scene checks failed (flags " + std::to_string(failures) + ")");
     }
-    std::cout << "Cornell room, lighting and Phong checks passed.\n";
+    std::cout << "Cornell room, lighting, materials, reflections and cat checks passed.\n";
 }
 
 }

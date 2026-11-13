@@ -1,9 +1,12 @@
 # HIP RT Demo
 
 A C++23 GPU path tracer rendering a Cornell-style box with red and green walls,
-a ceiling area light, three spheres, three tilted tori, and a faceted crystal.
+a ceiling area light, four spheres, three tilted tori, a faceted crystal, and
+a copper-colored low-poly cat.
 HIP RT traverses custom bounding-box primitives for the spheres and tori and
-native triangles for the mesh. The room is intersected directly.
+native triangles for the meshes. The room is intersected directly.
+The polished sphere next to the crystal reflects it like a mirror, while a
+separate glass sphere shows transparency and refraction.
 
 The renderer produces UHD 4K BMP images (3840 x 2160) with 1024 samples per
 pixel by default. It uses HIP `float3`, direct area-light sampling, indirect
@@ -60,7 +63,8 @@ to `build\hiprt_demo.bmp`. Rendering does not run the tests.
 ## Tests
 
 The separate GPU test executable checks mesh and custom-primitive intersections,
-room lighting, and Phong sampling without rendering an image:
+room lighting, Phong sampling, reflection, glass refraction, and cat visibility
+without rendering an image:
 
 ```powershell
 .\build\bin\hiprt_tests.exe
