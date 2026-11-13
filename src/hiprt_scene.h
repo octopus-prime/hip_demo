@@ -4,6 +4,8 @@
 #include <hiprt/hiprt.h>
 #include <hiprt/hiprt_device.h>
 
+#include "ply_mesh.h"
+
 namespace {
 struct TraceScene {
     hiprtGeometry geometry;
@@ -121,6 +123,52 @@ void append_triangle(std::vector<float4>& vertices, float3 a, float3 b, float3 c
     vertices.push_back({a.x, a.y, a.z, 0.0f});
     vertices.push_back({b.x, b.y, b.z, 0.0f});
     vertices.push_back({c.x, c.y, c.z, 0.0f});
+}
+
+void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, MeshUp mesh_up) {
+    const PlyMesh mesh = load_ply_mesh(path);
+    const auto orient = [mesh_up](const std::array<float, 3>& point) {
+        return mesh_up == MeshUp::z
+            ? std::array<double, 3>{point[0], point[2], -static_cast<double>(point[1])}
+            : std::array<double, 3>{point[0], point[1], point[2]};
+    };
+    std::array<double, 3> minimum{
+        std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::infinity()};
+    std::array<double, 3> maximum{-minimum[0], -minimum[1], -minimum[2]};
+    for (const auto& triangle : mesh.triangles) {
+        for (const auto index : triangle) {
+            const auto point = orient(mesh.vertices[index]);
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                minimum[axis] = std::min(minimum[axis], point[axis]);
+                maximum[axis] = std::max(maximum[axis], point[axis]);
+            }
+        }
+    }
+    constexpr std::array<double, 3> available{1.05, 1.55, 0.9};
+    double scale = std::numeric_limits<double>::infinity();
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        const double extent = maximum[axis] - minimum[axis];
+        if (extent > 0) {
+            scale = std::min(scale, available[axis] / extent);
+        }
+    }
+    if (!std::isfinite(scale)) {
+        throw std::runtime_error("PLY '" + path + "': mesh has zero extent");
+    }
+    vertices.reserve(vertices.size() + mesh.triangles.size() * 3);
+    for (const auto& triangle : mesh.triangles) {
+        for (const auto index : triangle) {
+            const auto point = orient(mesh.vertices[index]);
+            vertices.push_back({
+                static_cast<float>(cat_position.x + (point[0] - (minimum[0] + maximum[0]) * 0.5) * scale),
+                static_cast<float>(0.02 + (point[1] - minimum[1]) * scale),
+                static_cast<float>(cat_position.z + (point[2] - (minimum[2] + maximum[2]) * 0.5) * scale),
+                0.0f});
+        }
+    }
+    std::cout << "Loaded PLY mesh: " << path << " (" << mesh.vertices.size() << " vertices, "
+              << mesh.triangles.size() << " triangles).\n";
 }
 
 void append_ellipsoid(std::vector<float4>& vertices, float3 center, float3 radius) {
@@ -242,7 +290,7 @@ struct HiprtFunctionTableOwner {
 
 class HiprtScene {
 public:
-    explicit HiprtScene(int device) {
+    explicit HiprtScene(int device, const std::string& ply_path = {}, MeshUp mesh_up = MeshUp::y) {
         hipCtx_t hip_context = nullptr;
         check_hip(hipCtxGetCurrent(&hip_context), "Reading the current HIP context");
         if (!hip_context) {
@@ -303,15 +351,20 @@ public:
         for (const uint3 triangle : mesh_triangles) {
             append_triangle(vertices, mesh_points[triangle.x], mesh_points[triangle.y], mesh_points[triangle.z]);
         }
-        append_ellipsoid(vertices, cat_point(0.0f, 0.57f, 0.0f), {0.34f, 0.56f, 0.28f});
-        append_ellipsoid(vertices, cat_point(0.0f, 1.20f, 0.0f), {0.31f, 0.31f, 0.26f});
-        append_ear(vertices, -1.0f);
-        append_ear(vertices, 1.0f);
-        append_tail(vertices);
-        cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
-        append_ellipsoid(vertices, cat_point(-0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
-        append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
-        append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
+        if (ply_path.empty()) {
+            append_ellipsoid(vertices, cat_point(0.0f, 0.57f, 0.0f), {0.34f, 0.56f, 0.28f});
+            append_ellipsoid(vertices, cat_point(0.0f, 1.20f, 0.0f), {0.31f, 0.31f, 0.26f});
+            append_ear(vertices, -1.0f);
+            append_ear(vertices, 1.0f);
+            append_tail(vertices);
+            cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
+            append_ellipsoid(vertices, cat_point(-0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
+            append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
+            append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
+        } else {
+            append_ply_mesh(vertices, ply_path, mesh_up);
+            cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
+        }
         mesh_triangle_count_ = static_cast<unsigned int>(vertices.size() / 3);
         mesh_vertices_ = allocate_device<float4>(vertices.size(), "Allocating mesh vertices");
         check_hip(hipMemcpy(mesh_vertices_.get(), vertices.data(), vertices.size() * sizeof(float4), hipMemcpyHostToDevice),

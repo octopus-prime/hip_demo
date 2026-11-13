@@ -506,10 +506,44 @@ void run_checks(TraceScene scene) {
     std::cout << "Cornell room, lighting, materials, reflections and cat checks passed.\n";
 }
 
+__global__ void check_ply_scene(TraceScene scene, unsigned int* failure) {
+    const Ray ray{{cat_position.x, 0.30f, 2.30f}, {0.0f, 0.0f, -1.0f}};
+    hiprtRay hip_ray{};
+    hip_ray.origin = ray.origin;
+    hip_ray.direction = ray.direction;
+    hip_ray.minT = 0.001f;
+    hip_ray.maxT = 10.0f;
+    hiprtGeomTraversalClosest traversal(scene.mesh, hip_ray);
+    const hiprtHit mesh_hit = traversal.getNextHit();
+    Hit hit{};
+    *failure = !mesh_hit.hasHit() || mesh_hit.primID != mesh_triangles.size() ||
+        !hit_objects(ray, hit, scene) || hit.object_id != scene_object_count + 1 ||
+        hit.material != Material::diffuse || fabsf(hit.distance - 0.55f) > 0.001f;
 }
 
-int main() {
+void check_loaded_ply(int device, const char* path, MeshUp up) {
+    const HiprtScene loaded(device, path, up);
+    if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 1) {
+        throw std::runtime_error("Imported PLY did not replace the cat");
+    }
+    auto failure = allocate_device<unsigned int>(1, "Allocating PLY intersection check");
+    hipLaunchKernelGGL(check_ply_scene, dim3(1), dim3(1), 0, 0, loaded.scene(), failure.get());
+    check_hip(hipGetLastError(), "Launching PLY intersection check");
+    unsigned int result = 0;
+    check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost),
+              "Reading PLY intersection check");
+    if (result != 0) {
+        throw std::runtime_error("Imported PLY HIP RT intersection check failed");
+    }
+}
+
+}
+
+int main(int argc, char** argv) {
     try {
+        if (argc != 1 && argc != 4) {
+            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply]");
+        }
         const SelectedDevice device = select_device();
         std::cout << "Testing on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
@@ -517,6 +551,38 @@ int main() {
         const auto context_buffer = allocate_device<unsigned int>(1, "Initializing HIP context");
         const HiprtScene scene(device.id);
         run_checks(scene.scene());
+        if (argc == 4) {
+            std::vector<float4> y_vertices, z_vertices;
+            append_ply_mesh(y_vertices, argv[1], MeshUp::y);
+            append_ply_mesh(z_vertices, argv[2], MeshUp::z);
+            if (y_vertices.size() != 3 || z_vertices.size() != y_vertices.size()) {
+                throw std::runtime_error("PLY orientation produced incorrect vertex count");
+            }
+            for (std::size_t index = 0; index < y_vertices.size(); ++index) {
+                const float4 y = y_vertices[index], z = z_vertices[index];
+                if (y.x != z.x || y.y != z.y || y.z != z.z) {
+                    throw std::runtime_error("Z-up PLY was not rotated and fitted like the Y-up fixture");
+                }
+                std::vector<float4> rotated;
+                append_ply_mesh(rotated, argv[3], MeshUp::z);
+                constexpr std::array<float3, 3> expected{{
+                    {1.40f, 0.02f, 2.20f}, {2.30f, 0.02f, 2.20f}, {1.85f, 0.92f, 1.30f}}};
+                if (rotated.size() != expected.size()) {
+                    throw std::runtime_error("Z-up PLY orientation produced incorrect vertex count");
+                }
+                for (std::size_t index = 0; index < expected.size(); ++index) {
+                    const float4 point = rotated[index];
+                    if (std::abs(point.x - expected[index].x) > 0.0001f ||
+                        std::abs(point.y - expected[index].y) > 0.0001f ||
+                        std::abs(point.z - expected[index].z) > 0.0001f) {
+                        throw std::runtime_error("Z-up PLY orientation or fitting is incorrect");
+                    }
+                }
+            }
+            check_loaded_ply(device.id, argv[1], MeshUp::y);
+            check_loaded_ply(device.id, argv[2], MeshUp::z);
+            std::cout << "PLY mesh HIP RT intersection checks passed.\n";
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "HIP RT tests failed: " << error.what() << '\n';

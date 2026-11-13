@@ -1,0 +1,15 @@
+ply
+format ascii 1.0
+comment coordinates and an ignored vertex property
+element vertex 3
+property float x
+property float y
+property float z
+property uchar red
+element face 1
+property list uchar int vertex_indices
+end_header
+-1 0 0 255
+1 0 0 100
+0 2 0 50
+3 0 1 2

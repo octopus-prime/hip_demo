@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(hip_demo LANGUAGES CXX)
+project(hip_demo LANGUAGES C CXX)
 
 unset(HIP_DEMO_BUILD_HIPRT CACHE)
 unset(HIP_DEMO_HIPRT_MESH CACHE)
@@ -184,26 +184,43 @@ add_custom_target(
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/bin"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${HIPRT_RUNTIME_FILES}
         "${CMAKE_CURRENT_BINARY_DIR}/bin"
-    DEPENDS ${HIPRT_RUNTIME_FILES}
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply/LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/RPLY-LICENSE.txt"
+    DEPENDS ${HIPRT_RUNTIME_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply/LICENSE.txt"
     VERBATIM
 )
+add_library(rply STATIC third_party/rply/rply.c)
+target_include_directories(rply PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply")
+add_library(ply_mesh STATIC src/ply_mesh.cpp)
+target_link_libraries(ply_mesh PRIVATE rply)
+if(MSVC)
+    set_property(TARGET rply ply_mesh PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
 function(add_hiprt_executable target)
     set(source "${CMAKE_CURRENT_SOURCE_DIR}/src/${target}.hip")
-    set(output "${CMAKE_CURRENT_BINARY_DIR}/bin/${target}${CMAKE_EXECUTABLE_SUFFIX}")
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${target}${CMAKE_EXECUTABLE_SUFFIX}")
     add_custom_command(
         OUTPUT "${output}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/bin"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
         COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS}
             -fgpu-rdc "${source}"
-            -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}" ${HIPRT_LINK_OPTIONS}
+            -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
+            "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>" ${HIPRT_LINK_OPTIONS}
             -o "${output}"
         DEPENDS "${source}" "${HIPRT_SCENE_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/ply_mesh.h" ply_mesh rply
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
         COMMENT "Compiling ${target}"
     )
-    add_custom_target(${target} ALL DEPENDS "${output}")
+    add_custom_target(${target} ALL
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${output}"
+            "${CMAKE_CURRENT_BINARY_DIR}/bin/${target}${CMAKE_EXECUTABLE_SUFFIX}"
+        DEPENDS "${output}"
+        VERBATIM)
     add_dependencies(${target} hiprt_runtime)
 endfunction()
 
@@ -211,8 +228,18 @@ add_hiprt_executable(hiprt_demo)
 add_hiprt_executable(hiprt_tests)
 enable_testing()
 add_test(NAME hiprt_tests
-    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}")
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_ascii.ply"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_z_up.ply"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply")
 set_tests_properties(hiprt_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+add_executable(ply_loader_tests tests/ply_loader_tests.cpp)
+target_include_directories(ply_loader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(ply_loader_tests PRIVATE ply_mesh)
+if(MSVC)
+    set_property(TARGET ply_loader_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+add_test(NAME ply_loader_tests COMMAND ply_loader_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 add_custom_target(
     run
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"

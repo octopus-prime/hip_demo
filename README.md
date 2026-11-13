@@ -75,6 +75,35 @@ based on the same samples can introduce bias. It does not guarantee identical
 quality to a fixed-sample render. GPU render time includes adaptive sampling
 and sample-statistics collection, but not setup, image transfer or BMP writing.
 
+### PLY meshes
+
+Pass a PLY file to replace the cat with a mesh:
+
+```powershell
+.\build\bin\hiprt_demo.exe preview.bmp 64 --mesh "C:\models\my mesh.ply"
+```
+
+The mesh is uniformly scaled to fit the cat's space, centered there and placed
+on the floor. Its original orientation is retained by default (Y is up); it uses a diffuse
+copper-colored material with flat triangle normals. Without `--mesh`, the
+original cat remains.
+
+For a Z-up model such as Artec's `Dragon-ply.ply`, rotate it upright before
+fitting by adding `--mesh-up z`:
+
+```powershell
+.\build\bin\hiprt_demo.exe --mesh "C:\models\Dragon-ply.ply" --mesh-up z
+```
+
+`--mesh-up y` explicitly selects the default orientation.
+
+ASCII and little- or big-endian binary PLY files are supported. Each file must
+contain vertex `x`, `y`, `z` coordinates and triangular faces with an integer
+`vertex_indices` (or `vertex_index`) list. Non-triangular faces must be
+triangulated first. Additional properties such as colors, texture coordinates
+and vertex normals are ignored. Invalid files are reported as errors.
+No external model assets are included; check their licenses before use.
+
 Alternatively, `cmake --build build --target run --config Release` renders
 to `build\hiprt_demo.bmp`. Rendering does not run the tests.
 
@@ -82,7 +111,8 @@ to `build\hiprt_demo.bmp`. Rendering does not run the tests.
 
 The separate GPU test executable checks adaptive sampling, mesh and custom-primitive intersections,
 room lighting, Phong sampling, reflection, glass refraction, and cat visibility
-without rendering an image:
+without rendering an image. CTest additionally checks PLY parsing and an imported
+mesh intersection:
 
 ```powershell
 .\build\bin\hiprt_tests.exe
@@ -97,3 +127,8 @@ The build copies HIP RT runtime bundles and, on Windows, the matching HIP,
 COMGR and HIP RT runtime DLLs alongside the executable. Keep these files
 together: using a different system HIP runtime produced incorrect triangle
 hits in testing.
+
+PLY support uses RPly 1.1.3 by Diego Nehab, under the MIT license. Its original
+source and notices are in [third_party/rply](third_party/rply); the build also
+copies `RPLY-LICENSE.txt` next to the executables. Include that notice when
+redistributing the binaries.

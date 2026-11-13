@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -46,6 +47,8 @@ constexpr float light_half_depth = 0.7f;
 constexpr float light_center_z = -0.4f;
 constexpr float phong_exponent = 40.0f;
 constexpr float phong_specular_reflectance = 0.9f;
+
+enum class MeshUp { y, z };
 
 struct SceneObject {
     float3 center;
@@ -742,7 +745,8 @@ SelectedDevice select_device() {
 }
 
 template <typename SceneOwner>
-void render_image(const std::string& output_path, int sample_count, bool adaptive) {
+void render_image(const std::string& output_path, int sample_count, bool adaptive, const std::string& ply_path,
+                  MeshUp mesh_up) {
     const SelectedDevice device = select_device();
     std::cout << "Rendering on " << device.properties.name << " ("
               << device.properties.gcnArchName << ")...\n";
@@ -778,7 +782,7 @@ void render_image(const std::string& output_path, int sample_count, bool adaptiv
         device_sums.reset(sums_allocation);
     }
 
-    SceneOwner scene_owner(device.id);
+    SceneOwner scene_owner(device.id, ply_path, mesh_up);
     const TraceScene scene = scene_owner.scene();
 
     const dim3 block_size{16, 16};
@@ -881,11 +885,34 @@ int run_demo(int argc, char** argv, const char* default_output_path) {
         std::string output_path = default_output_path;
         int sample_count = samples_per_pixel;
         bool adaptive = true;
+        std::string ply_path;
+        MeshUp mesh_up = MeshUp::y;
+        bool mesh_up_specified = false;
         int positional_count = 0;
         for (int index = 1; index < argc; ++index) {
             const std::string_view input(argv[index]);
             if (input == "--fixed") {
                 adaptive = false;
+            } else if (input == "--mesh") {
+                if (!ply_path.empty() || index + 1 >= argc ||
+                    std::string_view(argv[index + 1]).substr(0, 2) == "--" ||
+                    std::string_view(argv[index + 1]).empty()) {
+                    throw std::runtime_error("--mesh requires exactly one PLY file path.");
+                }
+                ply_path = argv[++index];
+            } else if (input == "--mesh-up") {
+                if (mesh_up_specified || index + 1 >= argc) {
+                    throw std::runtime_error("--mesh-up requires one axis: y or z.");
+                }
+                const std::string_view axis(argv[++index]);
+                if (axis == "y") {
+                    mesh_up = MeshUp::y;
+                } else if (axis == "z") {
+                    mesh_up = MeshUp::z;
+                } else {
+                    throw std::runtime_error("--mesh-up requires one axis: y or z.");
+                }
+                mesh_up_specified = true;
             } else if (input.substr(0, 2) == "--") {
                 throw std::runtime_error("Unknown option: " + std::string(input));
             } else if (positional_count == 0) {
@@ -898,10 +925,14 @@ int run_demo(int argc, char** argv, const char* default_output_path) {
                 }
                 ++positional_count;
             } else {
-                throw std::runtime_error("Usage: renderer [output.bmp] [samples-per-pixel] [--fixed]");
+                throw std::runtime_error(
+                    "Usage: renderer [output.bmp] [samples-per-pixel] [--fixed] [--mesh file.ply] [--mesh-up y|z]");
             }
         }
-        render_image<SceneOwner>(output_path, sample_count, adaptive);
+        if (mesh_up_specified && ply_path.empty()) {
+            throw std::runtime_error("--mesh-up requires --mesh.");
+        }
+        render_image<SceneOwner>(output_path, sample_count, adaptive, ply_path, mesh_up);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "HIP RT demo failed: " << error.what() << '\n';
