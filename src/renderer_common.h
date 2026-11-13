@@ -300,20 +300,6 @@ __device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maxi
     return found;
 }
 
-__device__ bool hit_direct_objects(const Ray& ray, Hit& closest_hit) {
-    bool found = false;
-    float closest_distance = 1.0e30f;
-    for (unsigned int index = 0; index < scene_object_count; ++index) {
-        Hit candidate{};
-        if (hit_primitive(ray, index, closest_distance, candidate)) {
-            closest_hit = candidate;
-            closest_distance = candidate.distance;
-            found = true;
-        }
-    }
-    return found;
-}
-
 __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit) {
     bool found = false;
     for (int wall = 0; wall < 5; ++wall) {
@@ -598,8 +584,12 @@ bool matches_architecture(std::string_view target, std::string_view device) {
     return true;
 }
 
-template <typename SceneOwner>
-void render_image(const std::string& output_path, int sample_count) {
+struct SelectedDevice {
+    int id;
+    hipDeviceProp_t properties;
+};
+
+SelectedDevice select_device() {
     int device_count = 0;
     check_hip(hipGetDeviceCount(&device_count), "Detecting HIP devices");
     if (device_count == 0) {
@@ -635,8 +625,14 @@ void render_image(const std::string& output_path, int sample_count) {
             "). Reconfigure with HIP_ARCHITECTURE for an available GPU.");
     }
     check_hip(hipSetDevice(selected_device), "Selecting HIP device");
-    std::cout << "Rendering on " << device_properties.name << " ("
-              << device_properties.gcnArchName << ")...\n";
+    return {selected_device, device_properties};
+}
+
+template <typename SceneOwner>
+void render_image(const std::string& output_path, int sample_count) {
+    const SelectedDevice device = select_device();
+    std::cout << "Rendering on " << device.properties.name << " ("
+              << device.properties.gcnArchName << ")...\n";
     std::cout << "Scene: " << scene_object_count / 2 << " spheres, "
               << scene_object_count / 2 << " tori; " << sample_count << " samples per pixel.\n";
 
@@ -652,7 +648,7 @@ void render_image(const std::string& output_path, int sample_count) {
               "Allocating the sample sums on the GPU");
     device_sums.reset(sums_allocation);
 
-    SceneOwner scene_owner(selected_device);
+    SceneOwner scene_owner(device.id);
     const TraceScene scene = scene_owner.scene();
 
     const dim3 block_size{16, 16};

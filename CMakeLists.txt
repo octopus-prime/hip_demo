@@ -39,8 +39,8 @@ if(NOT HIP_VERSION_RESULT STREQUAL "0" OR NOT HIP_COMPILER_VERSION MATCHES "HIP 
         "Set HIPCC_EXECUTABLE to the HIP SDK 7.1 compiler or use a fresh build directory.")
 endif()
 set(HIP_ARCHITECTURE "" CACHE STRING "AMD GPU targets (semicolon-separated); empty detects local GPUs")
-set(HIPRT_DEMO_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/hiprt_demo.hip")
 set(HIP_DEMO_SHARED_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer_common.h")
+set(HIPRT_SCENE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/hiprt_scene.h")
 
 if(HIP_ARCHITECTURE)
     set(HIP_DEMO_ARCHITECTURES ${HIP_ARCHITECTURE})
@@ -170,7 +170,6 @@ if(NOT HIPRT_LIBRARY OR NOT HIPRT_RUNTIME OR NOT HIPRT_DEVICE_LIBRARY
     message(FATAL_ERROR "HIP RT or required HIP SDK 7.1 runtime files were not found in ${HIP_SDK_ROOT}.")
 endif()
 
-set(HIPRT_DEMO_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}")
 set(HIPRT_LINK_OPTIONS)
 if(UNIX)
     get_filename_component(HIPRT_LIBRARY_DIR "${HIPRT_LIBRARY}" DIRECTORY)
@@ -188,24 +187,36 @@ add_custom_target(
     DEPENDS ${HIPRT_RUNTIME_FILES}
     VERBATIM
 )
-add_custom_command(
-    OUTPUT "${HIPRT_DEMO_OUTPUT}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/bin"
-    COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS}
-        -fgpu-rdc "${HIPRT_DEMO_SOURCE}"
-        -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}" ${HIPRT_LINK_OPTIONS}
-        -o "${HIPRT_DEMO_OUTPUT}"
-    DEPENDS "${HIPRT_DEMO_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
-        "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
-        "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
-    VERBATIM
-    COMMENT "Compiling HIP RT C++23 ray tracer"
-)
-add_custom_target(hiprt_demo ALL DEPENDS "${HIPRT_DEMO_OUTPUT}")
-add_dependencies(hiprt_demo hiprt_runtime)
+function(add_hiprt_executable target)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/src/${target}.hip")
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/bin/${target}${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(
+        OUTPUT "${output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/bin"
+        COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS}
+            -fgpu-rdc "${source}"
+            -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}" ${HIPRT_LINK_OPTIONS}
+            -o "${output}"
+        DEPENDS "${source}" "${HIPRT_SCENE_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
+            "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
+            "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
+        VERBATIM
+        COMMENT "Compiling ${target}"
+    )
+    add_custom_target(${target} ALL DEPENDS "${output}")
+    add_dependencies(${target} hiprt_runtime)
+endfunction()
+
+add_hiprt_executable(hiprt_demo)
+add_hiprt_executable(hiprt_tests)
+enable_testing()
+add_test(NAME hiprt_tests
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}")
+set_tests_properties(hiprt_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 add_custom_target(
     run
-    COMMAND "${HIPRT_DEMO_OUTPUT}" "${CMAKE_CURRENT_BINARY_DIR}/hiprt_demo.bmp"
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"
+        "${CMAKE_CURRENT_BINARY_DIR}/hiprt_demo.bmp"
     DEPENDS hiprt_demo
     USES_TERMINAL
     COMMENT "Rendering hiprt_demo.bmp with HIP RT"

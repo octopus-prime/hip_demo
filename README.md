@@ -8,8 +8,8 @@ native triangles for the mesh. The room is intersected directly.
 The renderer produces UHD 4K BMP images (3840 x 2160) with 1024 samples per
 pixel by default. It uses HIP `float3`, direct area-light sampling, indirect
 bounces, and metal, glass, diffuse, and energy-conserving Phong-style glossy
-materials. GPU render time is reported separately from setup, intersection
-checks, image transfer, and BMP writing.
+materials. GPU render time is reported separately from setup, image transfer,
+and BMP writing.
 
 ## Requirements
 
@@ -55,9 +55,21 @@ path and optionally a positive sample count for a quicker preview:
 ```
 
 Alternatively, `cmake --build build --target run --config Release` renders
-to `build\hiprt_demo.bmp`. The executable checks representative mesh and
-custom-primitive intersections, room lighting, and Phong sampling before
-rendering.
+to `build\hiprt_demo.bmp`. Rendering does not run the tests.
+
+## Tests
+
+The separate GPU test executable checks mesh and custom-primitive intersections,
+room lighting, and Phong sampling without rendering an image:
+
+```powershell
+.\build\bin\hiprt_tests.exe
+```
+
+It uses the same scene and GPU selection as the renderer and returns a nonzero
+exit code on failure. Run it after changing the GPU, driver or SDK, since the
+renderer no longer performs these checks automatically. After building, it can
+also be run with `ctest --test-dir build -C Release --output-on-failure`.
 
 The build copies HIP RT runtime bundles and, on Windows, the matching HIP,
 COMGR and HIP RT runtime DLLs alongside the executable. Keep these files
