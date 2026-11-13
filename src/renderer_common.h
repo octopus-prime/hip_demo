@@ -362,7 +362,7 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit) {
     return found;
 }
 
-// Each backend defines TraceScene before including this header and implements object traversal.
+// The HIP RT renderer defines TraceScene and implements object traversal.
 __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene);
 
 __device__ bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene scene) {
@@ -759,7 +759,7 @@ int run_demo(int argc, char** argv, const char* default_output_path) {
         render_image<SceneOwner>(output_path, sample_count);
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "HIP demo failed: " << error.what() << '\n';
+        std::cerr << "HIP RT demo failed: " << error.what() << '\n';
         return 1;
     }
 }

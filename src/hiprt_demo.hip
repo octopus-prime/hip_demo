@@ -2,16 +2,12 @@
 #include <hiprt/hiprt.h>
 #include <hiprt/hiprt_device.h>
 
-#include "hiprt_mesh_config.h"
-
 namespace {
 struct TraceScene {
     hiprtGeometry geometry;
     hiprtFuncTable functions;
-#ifdef HIP_DEMO_HIPRT_MESH
     hiprtGeometry mesh;
     const float4* mesh_vertices;
-#endif
 };
 }
 
@@ -66,7 +62,6 @@ __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene 
 
 __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
     bool found = hit_custom_objects(ray, closest_hit, scene);
-#ifdef HIP_DEMO_HIPRT_MESH
     hiprtRay traversal_ray{};
     traversal_ray.origin = ray.origin;
     traversal_ray.direction = ray.direction;
@@ -84,11 +79,9 @@ __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) 
         closest_hit.roughness = 0.0f;
         found = true;
     }
-#endif
     return found;
 }
 
-#ifdef HIP_DEMO_HIPRT_MESH
 constexpr std::array<float3, 6> mesh_points{{
     {0.0f, 1.35f, 1.45f}, {0.50f, 0.50f, 1.45f}, {0.0f, 0.50f, 1.95f},
     {-0.50f, 0.50f, 1.45f}, {0.0f, 0.50f, 0.95f}, {0.0f, 0.02f, 1.45f},
@@ -212,8 +205,6 @@ __global__ void check_mesh(TraceScene scene, unsigned int* failures) {
     }
     failures[index] = failed;
 }
-#endif
-
 struct IntersectionCheck {
     bool expected_hit;
     bool actual_hit;
@@ -430,7 +421,6 @@ public:
         check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, {}),
                     "Initializing HIP RT function table");
 
-#ifdef HIP_DEMO_HIPRT_MESH
         std::array<float4, mesh_triangles.size() * 3> vertices{};
         for (std::size_t index = 0; index < mesh_triangles.size(); ++index) {
             const uint3 triangle = mesh_triangles[index];
@@ -483,10 +473,6 @@ public:
         }
         std::cout << "HIP RT triangle mesh intersection checks passed (" << mesh_triangles.size()
                   << " triangles).\n";
-#else
-        std::cout << "HIP RT triangle mesh is disabled in this build.\n";
-#endif
-
         auto device_results = allocate_device<IntersectionCheck>(intersection_check_count, "Allocating intersection checks");
         hipLaunchKernelGGL(check_intersections, dim3((intersection_check_count + 127) / 128),
                            dim3(128), 0, 0, scene(), device_results.get());
@@ -557,11 +543,7 @@ public:
     }
 
     TraceScene scene() const {
-#ifdef HIP_DEMO_HIPRT_MESH
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get()};
-#else
-        return {geometry_.value, functions_.value};
-#endif
     }
 
 private:
@@ -569,10 +551,8 @@ private:
     std::unique_ptr<float3, HipBufferDeleter> bounds_;
     HiprtGeometryOwner geometry_;
     HiprtFunctionTableOwner functions_;
-#ifdef HIP_DEMO_HIPRT_MESH
     std::unique_ptr<float4, HipBufferDeleter> mesh_vertices_;
     HiprtGeometryOwner mesh_;
-#endif
 };
 
 }
