@@ -1,11 +1,12 @@
 # HIP Demo
 
-A C++23 GPU path tracer that renders a metallic sphere and a glass torus. Two executables render the same scene:
+A C++23 GPU path tracer that renders a Cornell-style box with red and green walls, a ceiling area light, three spheres, and three tilted tori. Two executables render the same scene:
 
 - `hip_demo` uses HIP kernels and intersects the objects directly.
-- `hiprt_demo` uses HIP RT to traverse bounding boxes for two custom primitives. The sphere and torus intersection functions run on the GPU; the floor is intersected directly. It checks representative intersections against the direct implementation before rendering.
+- `hiprt_demo` uses HIP RT to traverse bounding boxes for custom primitives. The sphere and torus intersection functions run on the GPU; the room is intersected directly. It checks representative intersections against the direct implementation before rendering.
 
-Both use HIP `float3`, default to 1024 samples per pixel, and sample direct sunlight separately to reduce noise and bright speckles.
+Both render UHD 4K images (3840 x 2160), use HIP `float3`, default to 1024 samples per pixel, and sample the area light directly. Diffuse indirect bounces show color bleeding; the objects include metal, glass, diffuse, and energy-conserving Phong-style glossy materials. Rendering at full quality can take substantially longer than a low-resolution preview.
+Each executable reports GPU render time measured with HIP events around the render kernels. Device selection, scene/BVH setup, HIP RT intersection checks, image transfer, and BMP writing are excluded. Compare runs on the same GPU with the same sample count.
 
 The direct HIP implementation is in `src/hip_demo.hip`, the HIP RT implementation is in `src/hiprt_demo.hip`, and their shared rendering code is in `src/renderer_common.h`.
 

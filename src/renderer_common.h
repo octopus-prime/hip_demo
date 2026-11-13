@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <exception>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -20,17 +21,59 @@
 
 namespace {
 
-constexpr int image_width = 640;
-constexpr int image_height = 480;
+constexpr int image_width = 3840;
+constexpr int image_height = 2160;
 constexpr int samples_per_pixel = 1024;
-constexpr int samples_per_batch = 128;
+// Keep individual 4K kernels short enough for GPU watchdogs.
+constexpr int samples_per_batch = 8;
 constexpr int maximum_bounces = 8;
-constexpr float sun_cos_angle = 0.9992f;
-constexpr float3 sphere_center{-0.9f, 0.86f, 0.0f};
-constexpr float sphere_radius = 0.86f;
-constexpr float3 torus_center{0.95f, 1.0f, 0.0f};
-constexpr float torus_major_radius = 0.58f;
-constexpr float torus_minor_radius = 0.24f;
+constexpr float pi = 3.14159265359f;
+constexpr unsigned int scene_object_count = 6;
+constexpr float sphere_radius = 0.48f;
+constexpr float torus_major_radius = 0.43f;
+constexpr float torus_minor_radius = 0.14f;
+constexpr float3 camera_position{0.0f, 2.0f, 8.5f};
+constexpr float3 camera_target{0.0f, 1.8f, 0.0f};
+constexpr float room_half_width = 3.0f;
+constexpr float room_height = 4.0f;
+constexpr float room_half_depth = 2.5f;
+constexpr float light_half_width = 0.9f;
+constexpr float light_half_depth = 0.7f;
+constexpr float light_center_z = -0.4f;
+constexpr float phong_exponent = 40.0f;
+constexpr float phong_specular_reflectance = 0.9f;
+
+struct SceneObject {
+    float3 center;
+    bool sphere;
+    float tilt_sine;
+    float tilt_cosine;
+};
+
+__host__ __device__ SceneObject scene_object(unsigned int index) {
+    const bool sphere = index % 2 == 0;
+    const unsigned int tilt = index / 2;
+    constexpr float sin60 = 0.86602540378f;
+    const float sine = sphere ? 0.0f : (tilt == 0 ? -sin60 : tilt == 1 ? -0.5f : 0.5f);
+    const float cosine = sphere ? 1.0f : (tilt == 0 ? 0.5f : sin60);
+    const float absolute_sine = sine < 0.0f ? -sine : sine;
+    float x = 0.0f;
+    float z = -0.9f;
+    switch (index) {
+    case 0: x = -1.65f; break;
+    case 1: x = -0.50f; break;
+    case 2: x = 0.75f; break;
+    case 3: x = 1.90f; break;
+    case 4: x = -1.05f; z = 0.85f; break;
+    case 5: x = 0.75f; z = 0.85f; break;
+    }
+    return {{x, sphere ? sphere_radius : torus_minor_radius + torus_major_radius * absolute_sine, z},
+            sphere, sine, cosine};
+}
+
+__host__ __device__ float3 rotate_x(float3 value, float sine, float cosine) {
+    return {value.x, cosine * value.y - sine * value.z, sine * value.y + cosine * value.z};
+}
 
 __host__ __device__ constexpr float dot(float3 a, float3 b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
@@ -104,6 +147,8 @@ enum class Material : std::uint8_t {
     diffuse,
     metal,
     glass,
+    phong,
+    emissive,
 };
 
 struct Hit {
@@ -114,6 +159,7 @@ struct Hit {
     Material material;
     float roughness;
     bool front_face;
+    unsigned int object_id;
 };
 
 __device__ void set_face_normal(Hit& hit, const Ray& ray, float3 outward_normal) {
@@ -121,16 +167,32 @@ __device__ void set_face_normal(Hit& hit, const Ray& ray, float3 outward_normal)
     hit.normal = hit.front_face ? outward_normal : -outward_normal;
 }
 
-__device__ void set_sphere_material(Hit& hit) {
-    hit.albedo = {0.92f, 0.58f, 0.22f};
-    hit.material = Material::metal;
-    hit.roughness = 0.12f;
-}
-
-__device__ void set_torus_material(Hit& hit) {
-    hit.albedo = {0.88f, 0.97f, 1.0f};
-    hit.material = Material::glass;
+__device__ void set_object_material(Hit& hit, unsigned int object_id) {
     hit.roughness = 0.0f;
+    switch (object_id) {
+    case 0:
+        hit.albedo = {0.92f, 0.58f, 0.22f};
+        hit.material = Material::metal;
+        hit.roughness = 0.08f;
+        break;
+    case 1:
+    case 4:
+        hit.albedo = {0.96f, 0.98f, 1.0f};
+        hit.material = Material::glass;
+        break;
+    case 2:
+        hit.albedo = {0.12f, 0.28f, 0.82f};
+        hit.material = Material::phong;
+        break;
+    case 3:
+        hit.albedo = {0.85f, 0.48f, 0.08f};
+        hit.material = Material::phong;
+        break;
+    default:
+        hit.albedo = {0.55f, 0.15f, 0.55f};
+        hit.material = Material::diffuse;
+        break;
+    }
 }
 
 __device__ bool hit_sphere(const Ray& ray, float3 center, float radius, float maximum_distance, Hit& hit) {
@@ -154,7 +216,6 @@ __device__ bool hit_sphere(const Ray& ray, float3 center, float radius, float ma
     hit.distance = distance;
     hit.point = ray.origin + distance * ray.direction;
     set_face_normal(hit, ray, (hit.point - center) / radius);
-    set_sphere_material(hit);
     return true;
 }
 
@@ -164,8 +225,7 @@ __device__ float torus_distance(float3 point, float3 center, float major_radius,
     return sqrtf(ring_distance * ring_distance + local.y * local.y) - minor_radius;
 }
 
-__device__ bool hit_torus(const Ray& ray, float maximum_distance, Hit& hit) {
-    constexpr float3 center = torus_center;
+__device__ bool hit_torus(const Ray& ray, float3 center, float maximum_distance, Hit& hit) {
     constexpr float major_radius = torus_major_radius;
     constexpr float minor_radius = torus_minor_radius;
     constexpr float bound_radius = major_radius + minor_radius;
@@ -214,26 +274,92 @@ __device__ bool hit_torus(const Ray& ray, float maximum_distance, Hit& hit) {
     hit.distance = distance;
     hit.point = point;
     set_face_normal(hit, ray, normal);
-    set_torus_material(hit);
     return true;
 }
 
-__device__ bool hit_floor(const Ray& ray, float maximum_distance, Hit& hit) {
-    if (fabsf(ray.direction.y) < 1.0e-6f) {
-        return false;
+__device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maximum_distance, Hit& hit) {
+    const SceneObject object = scene_object(object_id);
+    bool found;
+    if (object.sphere) {
+        found = hit_sphere(ray, object.center, sphere_radius, maximum_distance, hit);
+    } else {
+        const Ray local_ray{
+            rotate_x(ray.origin - object.center, -object.tilt_sine, object.tilt_cosine),
+            rotate_x(ray.direction, -object.tilt_sine, object.tilt_cosine),
+        };
+        found = hit_torus(local_ray, {0.0f, 0.0f, 0.0f}, maximum_distance, hit);
+        if (found) {
+            hit.point = ray.origin + hit.distance * ray.direction;
+            hit.normal = rotate_x(hit.normal, object.tilt_sine, object.tilt_cosine);
+        }
     }
-    const float distance = -ray.origin.y / ray.direction.y;
-    if (distance < 0.001f || distance >= maximum_distance) {
-        return false;
+    if (found) {
+        hit.object_id = object_id;
+        set_object_material(hit, object_id);
     }
+    return found;
+}
 
-    hit.distance = distance;
-    hit.point = ray.origin + distance * ray.direction;
-    set_face_normal(hit, ray, {0.0f, 1.0f, 0.0f});
-    hit.albedo = {0.62f, 0.66f, 0.72f};
-    hit.material = Material::diffuse;
-    hit.roughness = 1.0f;
-    return true;
+__device__ bool hit_direct_objects(const Ray& ray, Hit& closest_hit) {
+    bool found = false;
+    float closest_distance = 1.0e30f;
+    for (unsigned int index = 0; index < scene_object_count; ++index) {
+        Hit candidate{};
+        if (hit_primitive(ray, index, closest_distance, candidate)) {
+            closest_hit = candidate;
+            closest_distance = candidate.distance;
+            found = true;
+        }
+    }
+    return found;
+}
+
+__device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit) {
+    bool found = false;
+    for (int wall = 0; wall < 5; ++wall) {
+        float origin, direction, position;
+        float3 normal;
+        if (wall < 2) {
+            origin = ray.origin.y;
+            direction = ray.direction.y;
+            position = wall == 0 ? 0.0f : room_height;
+            normal = wall == 0 ? float3{0.0f, 1.0f, 0.0f} : float3{0.0f, -1.0f, 0.0f};
+        } else if (wall == 2) {
+            origin = ray.origin.z;
+            direction = ray.direction.z;
+            position = -room_half_depth;
+            normal = {0.0f, 0.0f, 1.0f};
+        } else {
+            origin = ray.origin.x;
+            direction = ray.direction.x;
+            position = wall == 3 ? -room_half_width : room_half_width;
+            normal = wall == 3 ? float3{1.0f, 0.0f, 0.0f} : float3{-1.0f, 0.0f, 0.0f};
+        }
+        if (fabsf(direction) < 1.0e-6f) {
+            continue;
+        }
+        const float distance = (position - origin) / direction;
+        if (distance < 0.001f || distance >= maximum_distance) {
+            continue;
+        }
+        const float3 point = ray.origin + distance * ray.direction;
+        if (fabsf(point.x) > room_half_width + 0.0001f ||
+            point.y < -0.0001f || point.y > room_height + 0.0001f ||
+            fabsf(point.z) > room_half_depth + 0.0001f) {
+            continue;
+        }
+        maximum_distance = distance;
+        hit.distance = distance;
+        hit.point = point;
+        set_face_normal(hit, ray, normal);
+        hit.albedo = wall == 3 ? float3{0.72f, 0.10f, 0.10f} :
+            wall == 4 ? float3{0.10f, 0.65f, 0.16f} : float3{0.75f, 0.75f, 0.75f};
+        hit.material = wall == 1 && fabsf(point.x) <= light_half_width &&
+            fabsf(point.z - light_center_z) <= light_half_depth ? Material::emissive : Material::diffuse;
+        hit.roughness = 1.0f;
+        found = true;
+    }
+    return found;
 }
 
 // Each backend defines TraceScene before including this header and implements object traversal.
@@ -243,39 +369,25 @@ __device__ bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene scene) {
     bool found = hit_objects(ray, closest_hit, scene);
     const float closest_distance = found ? closest_hit.distance : 1.0e30f;
     Hit candidate{};
-    if (hit_floor(ray, closest_distance, candidate)) {
+    if (hit_room(ray, closest_distance, candidate)) {
         closest_hit = candidate;
         found = true;
     }
     return found;
 }
 
-__device__ float3 sun_direction() {
-    return normalize({-0.45f, 0.82f, 0.35f});
+__device__ float3 light_radiance() {
+    return {12.0f, 11.5f, 10.5f};
 }
 
-__device__ float3 sun_radiance() {
-    return {5.0f, 4.5f, 3.8f};
-}
-
-__device__ float3 sample_sun(Random& random) {
-    const float3 direction = sun_direction();
-    const float3 tangent = normalize(cross({0.0f, 1.0f, 0.0f}, direction));
-    const float3 bitangent = cross(direction, tangent);
-    const float cosine = 1.0f - random.next() * (1.0f - sun_cos_angle);
+__device__ float3 sample_phong_lobe(float3 axis, Random& random) {
+    const float3 reference = fabsf(axis.y) < 0.99f ? float3{0.0f, 1.0f, 0.0f} : float3{1.0f, 0.0f, 0.0f};
+    const float3 tangent = normalize(cross(reference, axis));
+    const float3 bitangent = cross(axis, tangent);
+    const float cosine = powf(random.next(), 1.0f / (phong_exponent + 1.0f));
     const float sine = sqrtf(fmaxf(0.0f, 1.0f - cosine * cosine));
-    const float angle = 6.28318530718f * random.next();
-    return cosine * direction + sine * (cosf(angle) * tangent + sinf(angle) * bitangent);
-}
-
-__device__ float3 sky_color(float3 direction, bool include_sun) {
-    const float blend = 0.5f * (direction.y + 1.0f);
-    float3 color = (1.0f - blend) * float3{0.88f, 0.91f, 0.96f} +
-        blend * float3{0.34f, 0.56f, 0.9f};
-    if (include_sun && dot(direction, sun_direction()) > sun_cos_angle) {
-        color = color + sun_radiance();
-    }
-    return color;
+    const float angle = 2.0f * pi * random.next();
+    return cosine * axis + sine * (cosf(angle) * tangent + sinf(angle) * bitangent);
 }
 
 __device__ float reflectance(float cosine, float refraction_index) {
@@ -288,17 +400,21 @@ __device__ float reflectance(float cosine, float refraction_index) {
 __device__ float3 trace(Ray ray, Random& random, TraceScene scene) {
     float3 radiance{0.0f, 0.0f, 0.0f};
     float3 throughput{1.0f, 1.0f, 1.0f};
-    bool include_sun = true;
+    bool include_emission = true;
 
     for (int bounce = 0; bounce < maximum_bounces; ++bounce) {
         Hit hit{};
         if (!hit_scene(ray, hit, scene)) {
-            radiance = radiance + throughput * sky_color(ray.direction, include_sun);
             break;
         }
 
-        if (hit.material == Material::metal) {
-            include_sun = true;
+        if (hit.material == Material::emissive) {
+            if (include_emission && hit.front_face) {
+                radiance = radiance + throughput * light_radiance();
+            }
+            break;
+        } else if (hit.material == Material::metal) {
+            include_emission = true;
             const float3 reflected = reflect(ray.direction, hit.normal);
             ray.direction = normalize(reflected + hit.roughness * random_in_unit_sphere(random));
             if (dot(ray.direction, hit.normal) <= 0.0f) {
@@ -306,7 +422,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene) {
             }
             throughput = throughput * hit.albedo;
         } else if (hit.material == Material::glass) {
-            include_sun = true;
+            include_emission = true;
             constexpr float refraction_index = 1.5f;
             const float eta = hit.front_face ? 1.0f / refraction_index : refraction_index;
             const float cosine = fminf(dot(-ray.direction, hit.normal), 1.0f);
@@ -322,19 +438,47 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene) {
                 throughput = throughput * hit.albedo;
             }
         } else {
-            const float3 light_direction = sample_sun(random);
+            const float3 light_point{(2.0f * random.next() - 1.0f) * light_half_width,
+                                     room_height,
+                                     light_center_z + (2.0f * random.next() - 1.0f) * light_half_depth};
+            const float3 shadow_origin = hit.point + hit.normal * 0.002f;
+            const float3 to_light = light_point - shadow_origin;
+            const float distance_squared = dot(to_light, to_light);
+            const float distance = sqrtf(distance_squared);
+            const float3 light_direction = to_light / distance;
             const float cosine = fmaxf(0.0f, dot(hit.normal, light_direction));
+            const float light_cosine = fmaxf(0.0f, light_direction.y);
             Hit shadow_hit{};
-            if (cosine > 0.0f &&
-                !hit_scene({hit.point + hit.normal * 0.002f, light_direction}, shadow_hit, scene)) {
-                // Solid angle of the sun divided by pi for Lambertian reflection.
-                radiance = radiance + throughput * hit.albedo * sun_radiance() *
-                    (2.0f * (1.0f - sun_cos_angle) * cosine);
+            if (cosine > 0.0f && light_cosine > 0.0f &&
+                (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
+                 shadow_hit.distance >= distance - 0.001f)) {
+                float3 scattering = hit.albedo * (cosine / pi);
+                if (hit.material == Material::phong) {
+                    const float3 reflected = normalize(reflect(ray.direction, hit.normal));
+                    // This normalized lobe integrates to one even before the surface cosine.
+                    const float lobe = powf(fmaxf(0.0f, dot(reflected, light_direction)), phong_exponent) *
+                        ((phong_exponent + 1.0f) / (2.0f * pi));
+                    scattering = 0.5f * (scattering + float3{1.0f, 1.0f, 1.0f} *
+                        (phong_specular_reflectance * cosine * lobe));
+                }
+                const float light_area = 4.0f * light_half_width * light_half_depth;
+                radiance = radiance + throughput * scattering * light_radiance() *
+                    (light_cosine * light_area / distance_squared);
             }
-            // Direct sun is already accounted for at this diffuse surface.
-            include_sun = false;
-            ray.direction = normalize(hit.normal + random_unit_vector(random));
-            throughput = throughput * hit.albedo;
+            include_emission = false;
+            if (hit.material == Material::phong && random.next() < 0.5f) {
+                const float3 reflected = normalize(reflect(ray.direction, hit.normal));
+                ray.direction = sample_phong_lobe(reflected, random);
+                const float outgoing_cosine = fmaxf(0.0f, dot(ray.direction, hit.normal));
+                if (outgoing_cosine == 0.0f) {
+                    break;
+                }
+                // The normalized Phong lobe is its own sampling PDF.
+                throughput = throughput * (phong_specular_reflectance * outgoing_cosine);
+            } else {
+                ray.direction = normalize(hit.normal + random_unit_vector(random));
+                throughput = throughput * hit.albedo;
+            }
         }
 
         ray.origin = hit.point + hit.normal * (dot(ray.direction, hit.normal) > 0.0f ? 0.002f : -0.002f);
@@ -355,9 +499,7 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
         return;
     }
 
-    const float3 camera_position{0.0f, 1.9f, 5.8f};
-    const float3 target{0.0f, 0.9f, 0.0f};
-    const float3 forward = normalize(target - camera_position);
+    const float3 forward = normalize(camera_target - camera_position);
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
     constexpr float half_view_height = 0.41421356f;
@@ -406,6 +548,23 @@ void check_hip(hipError_t result, std::string_view operation) {
             std::string(operation) + ": " + hipGetErrorString(result));
     }
 }
+
+struct HipEvent {
+    hipEvent_t value = nullptr;
+
+    HipEvent() {
+        check_hip(hipEventCreate(&value), "Creating GPU timing event");
+    }
+
+    ~HipEvent() {
+        if (value) {
+            const hipError_t result = hipEventDestroy(value);
+            if (result != hipSuccess) {
+                std::cerr << "Destroying GPU timing event: " << hipGetErrorString(result) << '\n';
+            }
+        }
+    }
+};
 
 bool matches_architecture(std::string_view target, std::string_view device) {
     const auto target_separator = target.find(':');
@@ -478,6 +637,8 @@ void render_image(const std::string& output_path, int sample_count) {
     check_hip(hipSetDevice(selected_device), "Selecting HIP device");
     std::cout << "Rendering on " << device_properties.name << " ("
               << device_properties.gcnArchName << ")...\n";
+    std::cout << "Scene: " << scene_object_count / 2 << " spheres, "
+              << scene_object_count / 2 << " tori; " << sample_count << " samples per pixel.\n";
 
     const std::size_t pixel_count = static_cast<std::size_t>(image_width) * image_height;
     std::unique_ptr<std::uint32_t, HipBufferDeleter> device_pixels;
@@ -499,6 +660,9 @@ void render_image(const std::string& output_path, int sample_count) {
         static_cast<unsigned int>((image_width + block_size.x - 1) / block_size.x),
         static_cast<unsigned int>((image_height + block_size.y - 1) / block_size.y),
     };
+    HipEvent start;
+    HipEvent stop;
+    check_hip(hipEventRecord(start.value, nullptr), "Starting GPU render timer");
     for (int first_sample = 0; first_sample < sample_count;) {
         const int sample_end = first_sample + std::min(samples_per_batch, sample_count - first_sample);
         hipLaunchKernelGGL(
@@ -518,7 +682,12 @@ void render_image(const std::string& output_path, int sample_count) {
         check_hip(hipGetLastError(), "Launching the HIP renderer");
         first_sample = sample_end;
     }
-    check_hip(hipDeviceSynchronize(), "Waiting for the HIP renderer");
+    check_hip(hipEventRecord(stop.value, nullptr), "Stopping GPU render timer");
+    check_hip(hipEventSynchronize(stop.value), "Waiting for the HIP renderer");
+    float render_milliseconds = 0.0f;
+    check_hip(hipEventElapsedTime(&render_milliseconds, start.value, stop.value), "Reading GPU render time");
+    std::cout << "GPU render time: " << std::fixed << std::setprecision(3)
+              << render_milliseconds / 1000.0f << " s\n";
 
     std::vector<std::uint32_t> pixels(pixel_count);
     check_hip(
