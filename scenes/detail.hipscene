@@ -1,0 +1,63 @@
+hipscene 1
+
+image {
+    size [3840, 2160]
+    output "detail.bmp"
+}
+sampling adaptive {
+    min 64
+    specular_min 256
+    max 1024
+    batch 8
+    relative_error 0.05
+    brightness_floor 0.05
+}
+camera {
+    position [0, 2.1, 6.8]
+    target [0, 1.75, 0]
+    half_view_height 0.35
+}
+room {
+    size [6, 4, 5]
+    floor tiles_detail
+    ceiling wood_detail
+    back marble_detail
+    left mandelbrot_detail
+    right julia_detail
+}
+material mirror = metal [0.96, 0.96, 0.96] roughness 0
+material glass = glass [0.96, 0.98, 1]
+material dragon = phong [0.18, 0.38, 0.68]
+material lettering = metal [0.92, 0.58, 0.22] roughness 0.18
+
+light torus {
+    center [0, 3.48, -0.35]
+    major_radius 1.05
+    minor_radius 0.12
+    radiance [24, 23, 21]
+}
+sphere {
+    center [-1.68, 0.72, -0.70]
+    radius 0.72
+    material mirror
+}
+sphere {
+    center [1.55, 0.72, 0.9]
+    radius 0.72
+    material glass
+}
+mesh {
+    file "../ply/Dragon-ply/Dragon-ply.ply"
+    up z
+    fit [1.85, 2.45, 1.55]
+    position [0, 0.02, -0.65]
+    material dragon
+}
+text {
+    font "C:\\Windows\\Fonts\\arial.ttf"
+    value "HIP RT"
+    size 1
+    depth 0.22
+    position [-1.64, 2.7, -2.52]
+    material lettering
+}

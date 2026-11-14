@@ -1,4 +1,4 @@
-#include "ply_mesh.h"
+#include "surface/mesh.h"
 
 #include <algorithm>
 #include <array>

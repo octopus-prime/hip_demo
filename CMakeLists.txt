@@ -8,6 +8,52 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(WIN32)
+    set(Boost_ROOT "$ENV{USERPROFILE}\\Downloads\\boost_1_92_0" CACHE PATH "Boost root directory")
+endif()
+cmake_policy(PUSH)
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+find_package(Boost 1.92 REQUIRED)
+cmake_policy(POP)
+
+include(FetchContent)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG 99623ef7097352da7993ba614161fd6a311e046e
+    OVERRIDE_FIND_PACKAGE)
+FetchContent_MakeAvailable(zlib)
+add_library(ZLIB::ZLIB ALIAS zlibstatic)
+set(PNG_SHARED OFF CACHE BOOL "" FORCE)
+set(PNG_STATIC ON CACHE BOOL "" FORCE)
+set(PNG_TESTS OFF CACHE BOOL "" FORCE)
+set(PNG_TOOLS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(libpng
+    GIT_REPOSITORY https://github.com/pnggroup/libpng.git
+    GIT_TAG cd952f49f95bb27154ae77dbb103032d95f6e580)
+block(PROPAGATE libpng_SOURCE_DIR libpng_BINARY_DIR)
+    set(SKIP_INSTALL_ALL ON)
+    FetchContent_MakeAvailable(libpng)
+endblock()
+set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF)
+FetchContent_Declare(freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG 3bd82b5f543bc84ccf2b1d0cdb63b95218099ee6)
+FetchContent_MakeAvailable(freetype)
+if(MSVC)
+    set_property(TARGET freetype PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
 find_program(
     HIPCC_EXECUTABLE
     NAMES hipcc hipcc.bat
@@ -39,8 +85,9 @@ if(NOT HIP_VERSION_RESULT STREQUAL "0" OR NOT HIP_COMPILER_VERSION MATCHES "HIP 
         "Set HIPCC_EXECUTABLE to the HIP SDK 7.1 compiler or use a fresh build directory.")
 endif()
 set(HIP_ARCHITECTURE "" CACHE STRING "AMD GPU targets (semicolon-separated); empty detects local GPUs")
-set(HIP_DEMO_SHARED_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer_common.h")
-set(HIPRT_SCENE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/hiprt_scene.h")
+file(GLOB_RECURSE HIP_DEMO_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h")
 
 if(HIP_ARCHITECTURE)
     set(HIP_DEMO_ARCHITECTURES ${HIP_ARCHITECTURE})
@@ -68,6 +115,10 @@ endif()
 list(REMOVE_DUPLICATES HIP_DEMO_ARCHITECTURES)
 
 set(HIPCC_ARGUMENTS --std=c++23 -O3)
+if(WIN32)
+    # The SDK bitcode's host stub targets an older MSVC version, with the same Windows ABI.
+    list(APPEND HIPCC_ARGUMENTS -Xarch_host -Wno-override-module)
+endif()
 foreach(architecture IN LISTS HIP_DEMO_ARCHITECTURES)
     if(NOT architecture MATCHES "^gfx[0-9a-z]+(:[a-z0-9_+-]+)*$")
         message(FATAL_ERROR "Invalid HIP architecture: ${architecture}")
@@ -81,7 +132,7 @@ file(CONFIGURE
     CONTENT "#define HIP_DEMO_ARCHITECTURES \"@HIP_DEMO_ARCHITECTURES@\"\n"
     @ONLY
 )
-list(APPEND HIPCC_ARGUMENTS "-I${CMAKE_CURRENT_BINARY_DIR}")
+list(APPEND HIPCC_ARGUMENTS "-I${CMAKE_CURRENT_BINARY_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 execute_process(
     COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" -print-resource-dir
@@ -192,14 +243,35 @@ add_custom_target(
 )
 add_library(rply STATIC third_party/rply/rply.c)
 target_include_directories(rply PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply")
-add_library(ply_mesh STATIC src/ply_mesh.cpp)
+add_library(ply_mesh STATIC src/surface/mesh.cpp)
+target_include_directories(ply_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(ply_mesh PRIVATE rply)
+add_library(scene_description STATIC src/parsing/parser.cpp src/building/scene_description.cpp)
+target_include_directories(scene_description PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(scene_description PRIVATE Boost::headers)
+target_compile_definitions(scene_description PRIVATE
+    NOMINMAX
+    HIP_DEMO_SCENE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
+add_library(text_geometry STATIC src/surface/text.cpp)
+target_include_directories(text_geometry PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(text_geometry PRIVATE freetype)
+add_library(app_support STATIC src/app/options.cpp src/saving/image.cpp src/saving/bmp.cpp src/saving/png.cpp)
+target_link_libraries(app_support PUBLIC scene_description PRIVATE Boost::headers png_static)
+add_custom_command(TARGET hiprt_runtime POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${freetype_SOURCE_DIR}/docs/FTL.TXT"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/FREETYPE-LICENSE.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${libpng_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/LIBPNG-LICENSE.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${zlib_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/ZLIB-LICENSE.txt"
+    VERBATIM)
 if(MSVC)
-    set_property(TARGET rply ply_mesh PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    set_property(TARGET rply ply_mesh scene_description text_geometry app_support png_static zlibstatic
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
-function(add_hiprt_executable target)
-    set(source "${CMAKE_CURRENT_SOURCE_DIR}/src/${target}.hip")
+function(add_hiprt_executable target source_path)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/${source_path}")
     set(output "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${target}${CMAKE_EXECUTABLE_SUFFIX}")
     add_custom_command(
         OUTPUT "${output}"
@@ -207,10 +279,14 @@ function(add_hiprt_executable target)
         COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS}
             -fgpu-rdc "${source}"
             -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
-            "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>" ${HIPRT_LINK_OPTIONS}
+            "$<TARGET_FILE:app_support>"
+            "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
+            "$<TARGET_FILE:scene_description>" ${HIPRT_LINK_OPTIONS}
+            "$<TARGET_FILE:text_geometry>" "$<TARGET_FILE:freetype>"
+            "$<TARGET_FILE:png_static>" "$<TARGET_FILE:zlibstatic>"
             -o "${output}"
-        DEPENDS "${source}" "${HIPRT_SCENE_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/ply_mesh.h" ply_mesh rply
+        DEPENDS "${source}" ${HIP_DEMO_HEADERS}
+            ply_mesh rply scene_description text_geometry freetype app_support png_static zlibstatic
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
@@ -224,15 +300,22 @@ function(add_hiprt_executable target)
     add_dependencies(${target} hiprt_runtime)
 endfunction()
 
-add_hiprt_executable(hiprt_demo)
-add_hiprt_executable(hiprt_tests)
+add_hiprt_executable(hiprt_demo src/app/main.hip)
+add_hiprt_executable(hiprt_tests tests/hiprt_tests.hip)
 enable_testing()
 add_test(NAME hiprt_tests
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_ascii.ply"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_z_up.ply"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
 set_tests_properties(hiprt_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+add_test(NAME render_progress_tests COMMAND "${CMAKE_COMMAND}"
+    "-DRENDERER=${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"
+    "-DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    "-DOUTPUT_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_progress_tests.cmake")
+set_tests_properties(render_progress_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 add_executable(ply_loader_tests tests/ply_loader_tests.cpp)
 target_include_directories(ply_loader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(ply_loader_tests PRIVATE ply_mesh)
@@ -240,6 +323,39 @@ if(MSVC)
     set_property(TARGET ply_loader_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 add_test(NAME ply_loader_tests COMMAND ply_loader_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+add_executable(scene_description_tests tests/scene_description_tests.cpp)
+target_include_directories(scene_description_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(scene_description_tests PRIVATE scene_description)
+if(MSVC)
+    set_property(TARGET scene_description_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+add_test(NAME scene_description_tests COMMAND scene_description_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
+add_executable(app_support_tests tests/app_support_tests.cpp)
+target_link_libraries(app_support_tests PRIVATE app_support Boost::headers png_static)
+if(MSVC)
+    set_property(TARGET app_support_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+add_test(NAME app_support_tests COMMAND app_support_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene"
+    "${CMAKE_CURRENT_BINARY_DIR}/app-support-test.bmp")
+add_executable(text_geometry_tests tests/text_geometry_tests.cpp)
+target_include_directories(text_geometry_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(text_geometry_tests PRIVATE text_geometry)
+if(MSVC)
+    set_property(TARGET text_geometry_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+find_file(HIP_DEMO_TEST_FONT NAMES arial.ttf DejaVuSans.ttf
+    PATHS "$ENV{WINDIR}/Fonts" /usr/share/fonts/truetype/dejavu)
+if(HIP_DEMO_TEST_FONT)
+    add_test(NAME text_geometry_tests COMMAND text_geometry_tests "${HIP_DEMO_TEST_FONT}")
+    add_test(NAME hiprt_text_tests COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
+        --text "${HIP_DEMO_TEST_FONT}")
+    set_tests_properties(hiprt_text_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+else()
+    add_test(NAME text_geometry_tests COMMAND text_geometry_tests)
+    message(STATUS "Set HIP_DEMO_TEST_FONT to enable font-loading and HIP RT text tests")
+endif()
 add_custom_target(
     run
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"

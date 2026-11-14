@@ -1,4 +1,10 @@
-#include "hiprt_scene.h"
+#include "gpu/callbacks.h"
+#include "gpu/scene.h"
+#include "gpu/device.h"
+#include "rendering/renderer.h"
+#include "reference_scene.h"
+
+using namespace hip_demo;
 
 namespace {
 
@@ -221,6 +227,13 @@ __global__ void check_adaptive_sampling(unsigned int* failures) {
     if (adaptive_converged(stable)) {
         failed |= 16;
     }
+    SceneSampling custom;
+    custom.minimum = 1;
+    AdaptivePixel single{};
+    add_adaptive_sample(single, {1, 1, 1});
+    if (adaptive_converged(single, &custom)) failed |= 32;
+    add_adaptive_sample(single, {1, 1, 1});
+    if (!adaptive_converged(single, &custom)) failed |= 64;
     *failures = failed;
 }
 
@@ -521,6 +534,196 @@ __global__ void check_ply_scene(TraceScene scene, unsigned int* failure) {
         hit.material != Material::diffuse || fabsf(hit.distance - 0.55f) > 0.001f;
 }
 
+__global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
+    unsigned int failed = 0;
+    for (unsigned int index = 0; index < 2; ++index) {
+        const float3 center = scene_object(index, true).center;
+        const Ray ray{center + float3{0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}};
+        Hit hit{};
+        const Material expected = index == 0 ? Material::metal : Material::glass;
+        if (!hit_custom_objects(ray, hit, scene) || hit.object_id != index || hit.material != expected ||
+            fabsf(hit.distance - (1.0f - detail_sphere_radius)) > 0.001f ||
+            (index == 0 && hit.roughness != 0.0f)) {
+            failed |= 1;
+        }
+    }
+    const Ray torus_ray{{detail_torus_center.x + detail_torus_major_radius,
+                         detail_torus_center.y - 0.5f, detail_torus_center.z}, {0.0f, 1.0f, 0.0f}};
+    Hit torus{}, ceiling{};
+    if (!hit_custom_objects(torus_ray, torus, scene) || torus.object_id != 2 ||
+        torus.material != Material::emissive || !torus.front_face ||
+        !hit_room({{0.0f, 3.8f, 0.0f}, {0.0f, 1.0f, 0.0f}}, 1.0e30f, ceiling, true) ||
+        ceiling.material != Material::diffuse) {
+        failed |= 2;
+    }
+    Random random{123456789u};
+    for (int i = 0; i < 128; ++i) {
+        const LightSample light = sample_torus_light(random);
+        const float radial = sqrtf((light.point.x - detail_torus_center.x) *
+                                    (light.point.x - detail_torus_center.x) +
+                                    (light.point.z - detail_torus_center.z) *
+                                    (light.point.z - detail_torus_center.z));
+        if (fabsf(torus_distance(light.point, detail_torus_center,
+                                 detail_torus_major_radius, detail_torus_minor_radius)) > 0.0001f ||
+            fabsf(dot(light.normal, light.normal) - 1.0f) > 0.0001f ||
+            fabsf(light.area_weight - 4.0f * pi * pi * detail_torus_minor_radius * radial) > 0.0001f) {
+            failed |= 4;
+        }
+    }
+    float3 illumination{};
+    for (int i = 0; i < 128; ++i) {
+        illumination = illumination + trace({{2.0f, 2.0f, 0.0f}, {0.0f, -1.0f, 0.0f}}, random, scene);
+    }
+    if (!(illumination.x > 0.0f && illumination.y > 0.0f && illumination.z > 0.0f)) {
+        failed |= 8;
+    }
+    const float3 glass_center = scene_object(1, true).center;
+    const Ray glass_ray{detail_camera_position,
+                        normalize(glass_center + float3{0.15f, 0.12f, 0.0f} - detail_camera_position)};
+    Hit entry{}, exit{}, behind{};
+    float3 inside_direction{}, outside_direction{};
+    if (!hit_scene(glass_ray, entry, scene) || entry.material != Material::glass || !entry.front_face ||
+        !refract(glass_ray.direction, entry.normal, 1.0f / 1.5f, inside_direction) ||
+        !hit_scene({entry.point - entry.normal * 0.002f, inside_direction}, exit, scene) ||
+        exit.object_id != 1 || exit.front_face ||
+        !refract(inside_direction, exit.normal, 1.5f, outside_direction) ||
+        dot(glass_ray.direction, outside_direction) > 0.999f ||
+        !hit_scene({exit.point - exit.normal * 0.002f, outside_direction}, behind, scene)) {
+        failed |= 16;
+    }
+    bool reflected_light = false;
+    const float3 mirror_center = scene_object(0, true).center;
+    for (int y = -8; y <= 8 && !reflected_light; ++y) {
+        for (int x = -8; x <= 8 && !reflected_light; ++x) {
+            const float3 target = mirror_center + float3{x * 0.075f, y * 0.075f, 0.0f};
+            const Ray ray{detail_camera_position, normalize(target - detail_camera_position)};
+            Hit mirror{}, reflected{};
+            if (hit_scene(ray, mirror, scene) && mirror.material == Material::metal && mirror.object_id == 0 &&
+                hit_scene({mirror.point + mirror.normal * 0.002f, reflect(ray.direction, mirror.normal)},
+                          reflected, scene) && reflected.material == Material::emissive) {
+                reflected_light = true;
+            }
+        }
+    }
+    if (!reflected_light) {
+        failed |= 32;
+    }
+    Hit detail_mesh{};
+    if (!hit_objects({{0.0f, 0.5f, 1.0f}, {0.0f, 0.0f, -1.0f}}, detail_mesh, scene) ||
+        detail_mesh.object_id != detail_object_count + 1 || detail_mesh.material != Material::phong ||
+        !(detail_mesh.albedo.z > detail_mesh.albedo.y && detail_mesh.albedo.y > detail_mesh.albedo.x)) {
+        failed |= 512;
+    }
+    Hit lettering{}, lettering_side{}, bare_wall{};
+    if (!hit_scene({{-1.52f, 3.0f, -2.0f}, {0, 0, -1}}, lettering, scene) ||
+        lettering.object_id != detail_object_count || lettering.material != Material::metal ||
+        fabsf(lettering.point.z + 2.3f) > 0.0001f || lettering.normal.z < 0.999f ||
+        !hit_scene({{-1.64f, 3.0f, -2.4f}, {1, 0, 0}}, lettering_side, scene) ||
+        lettering_side.object_id != detail_object_count || lettering_side.normal.x > -0.999f ||
+        !hit_scene({{-2.2f, 3.0f, -2.0f}, {0, 0, -1}}, bare_wall, scene) ||
+        bare_wall.material != Material::diffuse || fabsf(bare_wall.point.z + 2.5f) > 0.0001f) {
+        failed |= 2048;
+    }
+    Hit tile{}, grout{}, positive_edge{}, negative_edge{}, corner{}, classic{}, underside{}, grazing{};
+    const auto floor_ray = [](float x, float z) {
+        return Ray{{x, 1.0f, z}, {0.0f, -1.0f, 0.0f}};
+    };
+    if (!hit_room(floor_ray(0.375f, 0.375f), 10.0f, tile, true) ||
+        !hit_room(floor_ray(0.0f, 0.375f), 10.0f, grout, true) ||
+        !hit_room(floor_ray(0.020f, 0.375f), 10.0f, positive_edge, true) ||
+        !hit_room(floor_ray(-0.020f, 0.375f), 10.0f, negative_edge, true) ||
+        !hit_room(floor_ray(0.020f, 0.020f), 10.0f, corner, true) ||
+        !hit_room(floor_ray(0.0f, 0.375f), 10.0f, classic) ||
+        !hit_room({{0.020f, -1.0f, 0.375f}, {0.0f, 1.0f, 0.0f}}, 10.0f, underside, true) ||
+        !hit_room({{1.020f, 0.010f, 0.375f}, normalize({-1.0f, -0.010f, 0.0f})}, 10.0f, grazing, true) ||
+        !tile.tiled_floor || !grout.tiled_floor || classic.tiled_floor ||
+        tile.albedo.x <= grout.albedo.x || classic.albedo.x != 0.75f ||
+        fabsf(tile.normal.x) > 0.0001f || fabsf(tile.normal.z) > 0.0001f ||
+        positive_edge.normal.x >= -0.55f || negative_edge.normal.x <= 0.55f ||
+        corner.normal.x >= -0.30f || corner.normal.z >= -0.30f ||
+        !positive_edge.front_face || underside.front_face || underside.normal.y >= 0.0f ||
+        fabsf(grazing.normal.x) > 0.0001f || grazing.normal.y < 0.999f ||
+        fabsf(positive_edge.distance - 1.0f) > 0.0001f) {
+        failed |= 64;
+    }
+    Hit wood{}, wood_repeat{}, marble{}, marble_repeat{}, marble_backside{}, classic_back{};
+    const Ray ceiling_ray{{0.4f, 3.8f, 0.2f}, {0.0f, 1.0f, 0.0f}};
+    const Ray back_ray{{0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}};
+    float wood_minimum = 1.0f, wood_maximum = 0.0f;
+    for (int i = 0; i <= 20; ++i) {
+        Hit sample{};
+        if (!hit_room({{0.4f, 3.8f, -2.0f + i * 0.2f}, {0.0f, 1.0f, 0.0f}},
+                      10.0f, sample, true, scene.settings)) {
+            failed |= 128;
+        }
+        wood_minimum = fminf(wood_minimum, sample.albedo.x);
+        wood_maximum = fmaxf(wood_maximum, sample.albedo.x);
+    }
+    if (!hit_room(ceiling_ray, 10.0f, wood, true, scene.settings) ||
+        !hit_room({{0.4f, 3.0f, 0.2f}, {0.0f, 1.0f, 0.0f}}, 10.0f, wood_repeat, true, scene.settings) ||
+        wood.material != Material::diffuse || wood.tiled_floor || wood.normal.y != -1.0f ||
+        wood.albedo.x != wood_repeat.albedo.x || wood_maximum - wood_minimum < 0.03f ||
+        !(wood.albedo.x > wood.albedo.y && wood.albedo.y > wood.albedo.z) ||
+        fabsf(wood.distance - 0.2f) > 0.0001f) {
+        failed |= 128;
+    }
+    float marble_minimum = 1.0f, marble_maximum = 0.0f;
+    float variation_x = 0.0f, variation_y = 0.0f;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 20; ++x) {
+            Hit sample{};
+            if (!hit_room({{-2.85f + x * 0.3f, 0.1f + y * 0.25f, 0.0f}, {0.0f, 0.0f, -1.0f}},
+                          10.0f, sample, true, scene.settings) ||
+                sample.material != Material::diffuse || sample.tiled_floor || sample.normal.z != 1.0f ||
+                !isfinite(sample.albedo.x) || !isfinite(sample.albedo.y) || !isfinite(sample.albedo.z) ||
+                sample.albedo.x < 0.0f || sample.albedo.y < 0.0f || sample.albedo.z < 0.0f ||
+                sample.albedo.x > 1.0f || sample.albedo.y > 1.0f || sample.albedo.z > 1.0f) {
+                failed |= 1024;
+            }
+            marble_minimum = fminf(marble_minimum, sample.albedo.x);
+            marble_maximum = fmaxf(marble_maximum, sample.albedo.x);
+            variation_x = fmaxf(variation_x,
+                fabsf(sample.albedo.x - marble_albedo(sample.point + float3{0.1f, 0, 0}).x));
+            variation_y = fmaxf(variation_y,
+                fabsf(sample.albedo.x - marble_albedo(sample.point + float3{0, 0.1f, 0}).x));
+            if (fabsf(sample.albedo.x - marble_albedo(sample.point + float3{0.0001f, 0, 0}).x) > 0.02f) {
+                failed |= 1024;
+            }
+        }
+    }
+    if (!hit_room(back_ray, 10.0f, marble, true, scene.settings) ||
+        !hit_room({{0.0f, 2.0f, 1.0f}, {0.0f, 0.0f, -1.0f}}, 10.0f, marble_repeat, true, scene.settings) ||
+        !hit_room({{0.0f, 2.0f, -3.5f}, {0.0f, 0.0f, 1.0f}}, 10.0f, marble_backside, true, scene.settings) ||
+        !hit_room(back_ray, 10.0f, classic_back) ||
+        marble.albedo.x != marble_repeat.albedo.x || marble.albedo.x != marble_backside.albedo.x ||
+        marble_backside.front_face || marble_backside.normal.z != -1.0f ||
+        marble_minimum > 0.35f || marble_maximum < 0.75f || variation_x < 0.1f || variation_y < 0.1f ||
+        classic_back.albedo.x != 0.75f || classic_back.albedo.y != 0.75f) {
+        failed |= 1024;
+    }
+    Hit mandelbrot_inside{}, mandelbrot_outside{}, julia_inside{}, julia_outside{}, classic_left{}, classic_right{};
+    const auto side_ray = [](float direction, float z) {
+        return Ray{{0.0f, 2.0f, z}, {direction, 0.0f, 0.0f}};
+    };
+    if (!hit_room(side_ray(-1.0f, 0.0f), 10.0f, mandelbrot_inside, true) ||
+        !hit_room(side_ray(-1.0f, -2.4f), 10.0f, mandelbrot_outside, true) ||
+        !hit_room(side_ray(1.0f, 0.0f), 10.0f, julia_inside, true) ||
+        !hit_room(side_ray(1.0f, 2.4f), 10.0f, julia_outside, true) ||
+        !hit_room(side_ray(-1.0f, 0.0f), 10.0f, classic_left) ||
+        !hit_room(side_ray(1.0f, 0.0f), 10.0f, classic_right) ||
+        mandelbrot_inside.material != Material::diffuse || julia_inside.material != Material::diffuse ||
+        mandelbrot_inside.normal.x != 1.0f || julia_inside.normal.x != -1.0f ||
+        mandelbrot_outside.albedo.x <= mandelbrot_inside.albedo.x ||
+        julia_outside.albedo.y <= julia_inside.albedo.y ||
+        mandelbrot_outside.albedo.x <= mandelbrot_outside.albedo.y ||
+        julia_outside.albedo.y <= julia_outside.albedo.x ||
+        classic_left.albedo.x != 0.72f || classic_left.albedo.y != 0.10f ||
+        classic_right.albedo.x != 0.10f || classic_right.albedo.y != 0.65f) {
+        failed |= 256;
+    }
+    *failure = failed;
+}
+
 void check_loaded_ply(int device, const char* path, MeshUp up) {
     const HiprtScene loaded(device, path, up);
     if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 1) {
@@ -537,27 +740,248 @@ void check_loaded_ply(int device, const char* path, MeshUp up) {
     }
 }
 
+__global__ void check_described_scene(TraceScene scene, unsigned int* failure) {
+    unsigned int failed = 0;
+    Hit hit{};
+    if (!hit_custom_objects({{1, 3, -1}, {0, -1, 0}}, hit, scene) ||
+        fabsf(hit.distance - 0.7f) > 0.001f || hit.albedo.x != 0.8f ||
+        hit.material != Material::diffuse) failed |= 1;
+    const auto& torus = scene.primitives[1];
+    const float3 origin = vector3(torus.center) +
+        rotate_x({torus.major_radius, 0.5f, 0}, torus.tilt_sine, torus.tilt_cosine);
+    const float3 direction = rotate_x({0, -1, 0}, torus.tilt_sine, torus.tilt_cosine);
+    if (!hit_custom_objects({origin, direction}, hit, scene) || hit.object_id != 1 ||
+        hit.material != Material::metal || fabsf(hit.distance - 0.4f) > 0.003f) failed |= 2;
+    if (!hit_scene({{3, 1, 4}, {0, -1, 0}}, hit, scene) ||
+        fabsf(hit.distance - 1) > 0.001f || hit.albedo.z != 0.4f) failed |= 4;
+    if (!hit_scene({{1, 5, -2}, {0, 1, 0}}, hit, scene) ||
+        hit.material != Material::emissive || fabsf(hit.distance - 1) > 0.001f) failed |= 8;
+    for (int index = 0; index < 2; ++index) {
+        if (!hit_objects({{static_cast<float>(index * 2), 0.4f, 1}, {0, 0, -1}}, hit, scene) ||
+            hit.object_id != static_cast<unsigned int>(index + 2) ||
+            hit.material != (index == 0 ? Material::diffuse : Material::metal) ||
+            fabsf(hit.distance - 1) > 0.001f) failed |= 16;
+    }
+    if (scene.settings->camera_position.z != 12 || scene.settings->half_view_height != 0.4f ||
+        scene.settings->light.radiance.y != 4) failed |= 32;
+    Hit ceiling{}, back{};
+    if (scene.settings->surfaces[1].kind != SurfaceKind::wood ||
+        scene.settings->surfaces[2].kind != SurfaceKind::marble) {
+        failed |= 64;
+    }
+    if (!hit_scene({{3, 5, 4}, {0, 1, 0}}, ceiling, scene) || ceiling.material != Material::diffuse ||
+        fabsf(ceiling.albedo.x - wood_albedo({3, 4, 0}).x) > 0.001f) failed |= 128;
+    if (!hit_scene({{3, 3, 0}, {0, 0, -1}}, back, scene) || back.material != Material::diffuse ||
+        fabsf(back.albedo.x - marble_albedo({3, 3, -5}).x) > 0.001f) failed |= 256;
+    *failure = failed;
+}
+
+void check_description(int device, const char* path) {
+    auto description = load_scene_description(path);
+    auto failure = allocate_device<unsigned int>(1, "Allocating described scene check");
+    const HiprtScene scene(device, description);
+    hipLaunchKernelGGL(check_described_scene, dim3(1), dim3(1), 0, 0, scene.scene(), failure.get());
+    check_hip(hipGetLastError(), "Launching described scene check");
+    unsigned int result = 0;
+    check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost),
+              "Reading described scene check");
+    if (result != 0) {
+        throw std::runtime_error("Described scene check failed (flags " + std::to_string(result) + ")");
+    }
+    description.primitives.clear();
+    const HiprtScene mesh_only(device, description);
+    if (mesh_only.scene().geometry || !mesh_only.scene().mesh) {
+        throw std::runtime_error("Mesh-only scene built incorrect geometry");
+    }
+    description.meshes.clear();
+    const HiprtScene room_only(device, description);
+    if (room_only.scene().geometry || room_only.scene().mesh) {
+        throw std::runtime_error("Room-only scene built incorrect geometry");
+    }
+    std::cout << "Scene description GPU checks passed.\n";
+}
+
+struct TextProbe {
+    Ray ray;
+    float minimum = 0.001f, maximum = 100;
+    bool expected = false;
+    TextIntersection hit{};
+    unsigned int object_id = 0;
+    SceneMaterial material;
+};
+
+__global__ void check_text_probes(TraceScene scene, const TextProbe* probes, unsigned int count,
+                                  unsigned int* failures) {
+    const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    const auto& probe = probes[index];
+    hiprtRay ray{};
+    ray.origin = probe.ray.origin;
+    ray.direction = probe.ray.direction;
+    ray.minT = probe.minimum;
+    ray.maxT = probe.maximum;
+    hiprtGeomCustomTraversalClosest traversal(
+        scene.geometry, ray, hiprtTraversalHintDefault, nullptr, scene.functions);
+    const hiprtHit actual = traversal.getNextHit();
+    unsigned int failed = actual.hasHit() != probe.expected ? 1 : 0;
+    if (actual.hasHit() && probe.expected &&
+        (fabsf(actual.t - probe.hit.distance) > 0.0001f ||
+         dot(normalize(actual.normal), vector3(probe.hit.normal)) < 0.999f)) failed |= 2;
+    if (probe.minimum == 0.001f && probe.maximum == 100) {
+        Hit hit{};
+        const bool found = hit_objects(probe.ray, hit, scene);
+        const float3 outward = vector3(probe.hit.normal);
+        if (found != probe.expected || (found &&
+            (fabsf(hit.distance - probe.hit.distance) > 0.0001f || hit.object_id != probe.object_id ||
+             hit.material != probe.material.kind || hit.albedo.x != probe.material.albedo.x ||
+             hit.front_face != (dot(probe.ray.direction, outward) < 0)))) failed |= 4;
+    }
+    failures[index] = failed;
+}
+
+__global__ void check_mixed_text(TraceScene scene, TextProbe probe, unsigned int* failure) {
+    unsigned int failed = 0;
+    Hit hit{};
+    if (!hit_objects(probe.ray, hit, scene) || hit.object_id != probe.object_id + 1 ||
+        hit.material != probe.material.kind || fabsf(hit.distance - probe.hit.distance) > 0.0001f) failed |= 1;
+    if (!hit_objects({{-20, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 0 ||
+        fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 2;
+    const float3 a = mesh_points[0], b = mesh_points[2], c = mesh_points[1];
+    const float3 normal = normalize(cross(b - a, c - a));
+    const float3 center = (a + b + c) / 3;
+    if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 3 ||
+        hit.material != Material::phong || fabsf(hit.distance - 0.25f) > 0.0001f) failed |= 4;
+    const TextCurve cubic[2]{{{0, 0, 0, 2}, {0, 3, -3, 0}}, {{2, -2, 0, 0}, {0, 0, 0, 0}}};
+    TextGlyph glyph;
+    glyph.depth = 0.5f;
+    glyph.curve_count = 2;
+    glyph.normal_sign = -1;
+    TextIntersection curved_hit{};
+    if (!intersect_text(glyph, cubic, {0.25f, 2, 0.25f}, {0, -1, 0}, 0.001f, 100, curved_hit) ||
+        fabsf(curved_hit.distance - 1.25f) > 0.0001f) failed |= 8;
+    *failure = failed;
+}
+
+void check_text_scene(int device, const char* font) {
+    auto description = load_scene_description(builtin_scene_path(false));
+    description.primitives.clear();
+    description.meshes.clear();
+    description.texts = {
+        {font, "BO S", 1.5f, 0.3f, {10, 0, 0}, {{0.8f, 0.2f, 0.1f}, Material::metal, 0}},
+        {font, "BO", 0.7f, 0.5f, {10, 3, -1}, {{0.2f, 0.5f, 0.9f}, Material::glass, 0}}
+    };
+    TextGeometry geometry;
+    for (unsigned int index = 0; index < description.texts.size(); ++index) {
+        append_text_geometry(geometry, description.texts[index], index);
+    }
+    std::vector<TextProbe> probes;
+    const auto append_probe = [&](Ray ray, float minimum = 0.001f, float maximum = 100) {
+        TextProbe probe;
+        probe.ray = ray; probe.minimum = minimum; probe.maximum = maximum;
+        for (const auto& glyph : geometry.glyphs) {
+            TextIntersection hit{};
+            if (intersect_text(glyph, geometry.curves.data(),
+                               {ray.origin.x, ray.origin.y, ray.origin.z},
+                               {ray.direction.x, ray.direction.y, ray.direction.z},
+                               minimum, maximum, hit)) {
+                maximum = hit.distance;
+                probe.hit = hit;
+                probe.expected = true;
+                probe.object_id = glyph.object_id;
+                probe.material = glyph.material;
+            }
+        }
+        probes.push_back(probe);
+    };
+    unsigned int cap_hits = 0, cap_misses = 0;
+    for (const auto& glyph : geometry.glyphs) {
+        const float z = glyph.position.z;
+        for (int row = 0; row < 13; ++row) {
+            const float y = glyph.minimum.y + (glyph.maximum.y - glyph.minimum.y) * (row + 0.37f) / 13;
+            for (int column = 0; column < 13; ++column) {
+                const float x = glyph.minimum.x + (glyph.maximum.x - glyph.minimum.x) * (column + 0.41f) / 13;
+                append_probe({{x, y, z + 2}, {0, 0, -1}});
+                if (probes.back().expected) ++cap_hits; else ++cap_misses;
+                append_probe({{x, y, z - 2}, {0, 0, 1}});
+                append_probe({{x, y, z + 2}, {0, 0, -1}}, 1.9f);
+                append_probe({{x, y, z + 2}, {0, 0, -1}}, 0.001f, 1);
+                append_probe({{x, y, z + glyph.depth * 0.5f}, {1, 0, 0}});
+                append_probe({{x, y, z + glyph.depth * 0.5f}, {0, -1, 0}});
+                append_probe({{x, y, z + 2}, {0.1f, 0.03f, -1}});
+            }
+        }
+    }
+    if (!cap_hits || !cap_misses) throw std::runtime_error("Text test must exercise filled and empty cap regions");
+    const HiprtScene scene(device, description);
+    if (!scene.scene().geometry || scene.scene().mesh || scene.scene().mesh_triangle_count != 0) {
+        throw std::runtime_error("Text must use custom geometry, not triangles");
+    }
+    auto device_probes = allocate_device<TextProbe>(probes.size(), "Allocating text probes");
+    auto failures = allocate_device<unsigned int>(probes.size(), "Allocating text probe results");
+    check_hip(hipMemcpy(device_probes.get(), probes.data(), probes.size() * sizeof(TextProbe), hipMemcpyHostToDevice),
+              "Uploading text probes");
+    const auto count = static_cast<unsigned int>(probes.size());
+    hipLaunchKernelGGL(check_text_probes, dim3((count + 63) / 64), dim3(64), 0, 0,
+                       scene.scene(), device_probes.get(), count, failures.get());
+    check_hip(hipGetLastError(), "Launching text intersection checks");
+    std::vector<unsigned int> results(count);
+    check_hip(hipMemcpy(results.data(), failures.get(), results.size() * sizeof(unsigned int), hipMemcpyDeviceToHost),
+              "Reading text intersection checks");
+    for (unsigned int index = 0; index < count; ++index) {
+        if (results[index]) throw std::runtime_error("Text HIP RT probe " + std::to_string(index) +
+                                                    " failed (flags " + std::to_string(results[index]) + ")");
+    }
+    ScenePrimitive sphere;
+    sphere.center = {-20, 1, -20};
+    sphere.radius = 0.5f;
+    description.primitives.push_back(sphere);
+    SceneMesh crystal;
+    crystal.kind = SceneMeshKind::crystal;
+    description.meshes.push_back(crystal);
+    const HiprtScene mixed(device, description);
+    const auto sample = std::find_if(probes.begin(), probes.end(), [](const TextProbe& p) { return p.expected; });
+    hipLaunchKernelGGL(check_mixed_text, dim3(1), dim3(1), 0, 0, mixed.scene(), *sample, failures.get());
+    check_hip(hipGetLastError(), "Launching mixed text checks");
+    unsigned int mixed_failure = 0;
+    check_hip(hipMemcpy(&mixed_failure, failures.get(), sizeof(mixed_failure), hipMemcpyDeviceToHost),
+              "Reading mixed text checks");
+    if (mixed_failure) throw std::runtime_error("Mixed text scene failed (flags " + std::to_string(mixed_failure) + ")");
+    description.primitives.clear();
+    description.meshes.clear();
+    description.texts[0].value = "   ";
+    description.texts.resize(1);
+    const HiprtScene spaces(device, description);
+    if (spaces.scene().geometry || spaces.scene().mesh) throw std::runtime_error("Spaces must not create geometry");
+    std::cout << "Text HIP RT checks passed (" << count << " rays, no triangulation).\n";
+}
+
 }
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 1 && argc != 4) {
-            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply]");
+        const bool text_mode = argc == 3 && std::string_view(argv[1]) == "--text";
+        if (!text_mode && argc != 1 && argc != 4 && argc != 5) {
+            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply [scene.hipscene]] | --text font");
         }
         const SelectedDevice device = select_device();
         std::cout << "Testing on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
         // Establish the HIP context before HIP RT queries it.
         const auto context_buffer = allocate_device<unsigned int>(1, "Initializing HIP context");
+        if (text_mode) {
+            check_text_scene(device.id, argv[2]);
+            return 0;
+        }
         const HiprtScene scene(device.id);
         run_checks(scene.scene());
-        if (argc == 4) {
+        if (argc >= 4) {
             std::vector<float4> y_vertices, z_vertices;
             append_ply_mesh(y_vertices, argv[1], MeshUp::y);
             append_ply_mesh(z_vertices, argv[2], MeshUp::z);
             if (y_vertices.size() != 3 || z_vertices.size() != y_vertices.size()) {
                 throw std::runtime_error("PLY orientation produced incorrect vertex count");
             }
+            if (argc == 5) check_description(device.id, argv[4]);
             for (std::size_t index = 0; index < y_vertices.size(); ++index) {
                 const float4 y = y_vertices[index], z = z_vertices[index];
                 if (y.x != z.x || y.y != z.y || y.z != z.z) {
@@ -582,6 +1006,20 @@ int main(int argc, char** argv) {
             check_loaded_ply(device.id, argv[1], MeshUp::y);
             check_loaded_ply(device.id, argv[2], MeshUp::z);
             std::cout << "PLY mesh HIP RT intersection checks passed.\n";
+            const HiprtScene detail_scene(device.id, argv[2], MeshUp::z, true);
+            if (detail_scene.scene().mesh_triangle_count != 1) {
+                throw std::runtime_error("Detail scene must contain only the supplied mesh");
+            }
+            auto failure = allocate_device<unsigned int>(1, "Allocating detail scene check");
+            hipLaunchKernelGGL(check_detail_scene, dim3(1), dim3(1), 0, 0, detail_scene.scene(), failure.get());
+            check_hip(hipGetLastError(), "Launching detail scene check");
+            unsigned int result = 0;
+            check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost),
+                      "Reading detail scene check");
+            if (result != 0) {
+                throw std::runtime_error("Detail scene check failed (flags " + std::to_string(result) + ")");
+            }
+            std::cout << "Detail scene, torus light and materials checks passed.\n";
         }
         return 0;
     } catch (const std::exception& error) {

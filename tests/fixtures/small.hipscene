@@ -1,0 +1,55 @@
+hipscene 1
+image {
+    size [17, 9]
+    output "scene_test.bmp"
+}
+sampling fixed {
+    count 3
+    batch 2
+}
+camera {
+    position [0, 3, 12]
+    target [0, 2, 0]
+    half_view_height 0.4
+}
+room {
+    size [8, 6, 10]
+    floor color [0.2, 0.3, 0.4]
+    ceiling wood_detail
+    back marble_detail
+    left color [0.6, 0.1, 0.2]
+    right julia_detail
+}
+material red = diffuse [0.8, 0.2, 0.1]
+material blue = metal [0.1, 0.2, 0.9] roughness 0.3
+light ceiling_rectangle {
+    center [1, -2]
+    size [2, 1]
+    radiance [3, 4, 5]
+}
+sphere {
+    center [1, 2, -1]
+    radius 0.3
+    material red
+}
+torus {
+    center [-1, 2, -1]
+    major_radius 0.6
+    minor_radius 0.1
+    tilt_x 150
+    material blue
+}
+mesh {
+    file "triangle_ascii.ply"
+    up y
+    fit [1, 1, 1]
+    position [0, 0.2, 0]
+    material red
+}
+mesh {
+    file "triangle_ascii.ply"
+    up y
+    fit [1, 1, 1]
+    position [2, 0.2, 0]
+    material blue
+}
