@@ -288,9 +288,17 @@ subtractions are empty. Nearly coincident boundaries are grouped within
 disappear. At edges where multiple surfaces meet, the selected normal is
 deterministic but not unique. Deep/large constructions cost more than simple
 primitives; bounding boxes are not tightened for individual Boolean operations.
-Text CSG streams boundaries rather than imposing a four-hit limit. It also
-evaluates contour winding to determine solid membership, so long strings and
-many overlapping operands can cost substantially more than standalone text.
+Text CSG caches analytic intersections and normals per ray, then advances
+paired contour winding, cap occupancy and Boolean states without repeatedly
+solving the same polynomials; identical operands share their cached events.
+Cap membership normally uses those cached
+crossings; ambiguous cap/contour edges retain the original point-fill tie-break.
+The fast path uses local scratch for 64 events, 32 intersected glyphs and 64
+leaf instructions. If any capacity is exceeded, the unrestricted boundary
+streaming path is used instead: hits are never truncated and there is no
+four-hit limit. Long strings and many overlapping operands can therefore
+still cost substantially more than standalone text. Pure sphere/torus CSG
+and standalone text keep their existing intersection paths.
 
 ### Migration from the previous CLI and scene format
 
