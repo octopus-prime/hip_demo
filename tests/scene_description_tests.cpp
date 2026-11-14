@@ -35,7 +35,7 @@ void rejects(const std::string& text, const char* reason) {
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 3, "expected fixture and example paths");
+        require(argc == 2, "expected fixture path");
         const auto classic = load_scene_description(builtin_scene_path(false));
         const auto detail = load_scene_description(builtin_scene_path(true));
         require(classic.primitives.size() == 7 && classic.meshes.size() == 2 &&
@@ -45,9 +45,9 @@ int main(int argc, char** argv) {
                 "tilt_x uses degrees");
         require(detail.primitives.size() == 3 && detail.primitives.back().material.kind == Material::emissive &&
                 detail.settings.surfaces[0].kind == SurfaceKind::tiles &&
+                detail.settings.surfaces[1].kind == SurfaceKind::wood &&
+                detail.settings.surfaces[2].kind == SurfaceKind::marble &&
                 detail.settings.sampling.adaptive, "detail scene conversion");
-        const auto example = load_scene_description(argv[2]);
-        require(example.meshes.size() == 1 && example.settings.light.torus, "original example parses");
         const auto scene = load_scene_description(argv[1]);
         require(scene.width == 17 && scene.height == 9 && scene.settings.sampling.maximum == 3 &&
                 !scene.settings.sampling.adaptive && scene.settings.sampling.batch == 2, "image and sampling");
@@ -59,6 +59,13 @@ int main(int argc, char** argv) {
         const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         const auto compact = parse_scene_description(replace(text, "image {", "image{"));
         require(compact.width == 17, "punctuation does not require whitespace");
+        require(compact.settings.surfaces[1].kind == SurfaceKind::wood &&
+                compact.settings.surfaces[2].kind == SurfaceKind::marble,
+                "wood ceiling and marble back survive grammar and scene conversion");
+        const auto legacy = parse_scene_description(replace(text, "back marble_detail", "back wood_detail"));
+        require(legacy.settings.surfaces[2].kind == SurfaceKind::wood, "existing wood backs remain supported");
+        rejects(replace(text, "ceiling wood_detail", "ceiling marble_detail"), "ceiling surface");
+        rejects(replace(text, "back marble_detail", "back marble_detail_extra"), "back surface");
         const auto escaped = parse_scene_description(replace(text, "scene_test.bmp", R"(dir\\a\"b.bmp)"));
         require(escaped.output == "dir\\a\"b.bmp", "quoted string escapes");
         const auto adaptive = parse_scene_description(replace(text, "sampling fixed {\n    count 3\n    batch 2\n}",

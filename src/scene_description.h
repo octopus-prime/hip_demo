@@ -8,7 +8,7 @@
 
 enum class MeshUp { y, z };
 enum class Material : std::uint8_t { diffuse, metal, glass, phong, emissive };
-enum class SurfaceKind { color, tiles, wood, mandelbrot, julia };
+enum class SurfaceKind { color, tiles, wood, mandelbrot, julia, marble };
 
 struct SceneVector {
     float x = 0, y = 0, z = 0;

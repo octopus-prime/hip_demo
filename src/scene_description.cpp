@@ -157,7 +157,10 @@ bp::rule<struct adaptive_p_, SceneSampling> adaptive_p = "adaptive sampling";
 bp::rule<struct sampling_p_, SceneSampling> sampling_p = "fixed or adaptive sampling";
 bp::rule<struct camera_p_, Camera> camera_p = "camera";
 bp::rule<struct surface_p_, SceneSurface> surface_p = "color surface";
+bp::rule<struct wood_p_, SceneSurface> wood_p = "wood surface";
+bp::rule<struct marble_p_, SceneSurface> marble_p = "marble surface";
 bp::rule<struct floor_p_, SceneSurface> floor_p = "floor surface";
+bp::rule<struct ceiling_p_, SceneSurface> ceiling_p = "ceiling surface";
 bp::rule<struct back_p_, SceneSurface> back_p = "back surface";
 bp::rule<struct left_p_, SceneSurface> left_p = "left surface";
 bp::rule<struct right_p_, SceneSurface> right_p = "right surface";
@@ -233,12 +236,15 @@ auto camera_p_def = position_p >> keyword("camera") > '{'
     > keyword("position") > vector_p > keyword("target") > vector_p
     > keyword("half_view_height") > positive_p > '}';
 auto surface_p_def = keyword("color") > color_p > bp::attr(SurfaceKind::color);
+auto wood_p_def = keyword("wood_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::wood});
+auto marble_p_def = keyword("marble_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::marble});
 auto floor_p_def = surface_p | (keyword("tiles_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::tiles}));
-auto back_p_def = surface_p | (keyword("wood_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::wood}));
+auto ceiling_p_def = surface_p | wood_p;
+auto back_p_def = surface_p | wood_p | marble_p;
 auto left_p_def = surface_p | (keyword("mandelbrot_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::mandelbrot}));
 auto right_p_def = surface_p | (keyword("julia_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::julia}));
 auto room_p_def = keyword("room") > '{' > keyword("size") > dimensions_p
-    > keyword("floor") > floor_p > keyword("ceiling") > surface_p > keyword("back") > back_p
+    > keyword("floor") > floor_p > keyword("ceiling") > ceiling_p > keyword("back") > back_p
     > keyword("left") > left_p > keyword("right") > right_p > '}';
 
 auto diffuse_p_def = keyword("diffuse") > color_p > bp::attr(Material::diffuse) > bp::attr(1.0f);
@@ -275,8 +281,8 @@ auto scene_p_def = keyword("hipscene") > keyword("1")
 BOOST_PARSER_DEFINE_RULES(
     position_p, identifier_p, string_p, scalar_p, positive_p, integer_p, vector2_p, vector_p,
     dimensions_p, color_p, radiance_p, roughness_p, image_p, fixed_p, adaptive_p, sampling_p,
-    camera_p, surface_p, floor_p, back_p, left_p, right_p, room_p, diffuse_p, phong_p, metal_p,
-    glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
+    camera_p, surface_p, wood_p, marble_p, floor_p, ceiling_p, back_p, left_p, right_p, room_p,
+    diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
     mesh_up_p, mesh_p, builtin_p, object_p, scene_p);
 
 SceneDescription describe_scene(const ParsedScene& parsed, const SceneErrors& errors) {

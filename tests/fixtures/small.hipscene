@@ -15,8 +15,8 @@ camera {
 room {
     size [8, 6, 10]
     floor color [0.2, 0.3, 0.4]
-    ceiling color [0.5, 0.5, 0.5]
-    back wood_detail
+    ceiling wood_detail
+    back marble_detail
     left color [0.6, 0.1, 0.2]
     right julia_detail
 }

@@ -402,7 +402,7 @@ __device__ void apply_floor_tiles(Hit& hit, const Ray& ray) {
     hit.tiled_floor = true;
 }
 
-__device__ float wood_noise_value(int x, int y) {
+__device__ float noise_lattice(int x, int y) {
     std::uint32_t hash = static_cast<std::uint32_t>(x) * 0x8da6b343u ^
                          static_cast<std::uint32_t>(y) * 0xd8163841u;
     hash ^= hash >> 16;
@@ -411,25 +411,49 @@ __device__ float wood_noise_value(int x, int y) {
     return static_cast<float>(hash & 0xffffu) / 65535.0f;
 }
 
-__device__ float wood_noise(float x, float y) {
+__device__ float value_noise(float x, float y) {
     const int ix = static_cast<int>(floorf(x));
     const int iy = static_cast<int>(floorf(y));
     float fx = x - floorf(x);
     float fy = y - floorf(y);
     fx = fx * fx * (3.0f - 2.0f * fx);
     fy = fy * fy * (3.0f - 2.0f * fy);
-    const float lower = wood_noise_value(ix, iy) * (1.0f - fx) + wood_noise_value(ix + 1, iy) * fx;
-    const float upper = wood_noise_value(ix, iy + 1) * (1.0f - fx) + wood_noise_value(ix + 1, iy + 1) * fx;
+    const float lower = noise_lattice(ix, iy) * (1.0f - fx) + noise_lattice(ix + 1, iy) * fx;
+    const float upper = noise_lattice(ix, iy + 1) * (1.0f - fx) + noise_lattice(ix + 1, iy + 1) * fx;
     return lower * (1.0f - fy) + upper * fy;
 }
 
 __device__ float3 wood_albedo(float3 point) {
-    const float warp = wood_noise(point.x * 1.2f, point.y * 0.65f);
-    const float detail = wood_noise(point.x * 5.0f, point.y * 0.8f);
-    const float fine = wood_noise(point.x * 22.0f, point.y * 1.2f);
+    const float warp = value_noise(point.x * 1.2f, point.y * 0.65f);
+    const float detail = value_noise(point.x * 5.0f, point.y * 0.8f);
+    const float fine = value_noise(point.x * 22.0f, point.y * 1.2f);
     const float grain = 0.5f + 0.5f * sinf(point.x * 35.0f + 12.0f * warp + 3.0f * detail);
     const float tone = clamp01(0.10f + 0.48f * grain + 0.27f * detail + 0.15f * fine);
     return (1.0f - tone) * float3{0.25f, 0.10f, 0.035f} + tone * float3{0.66f, 0.36f, 0.14f};
+}
+
+__device__ float fractal_noise(float x, float y) {
+    float value = 0.0f;
+    float amplitude = 0.5f;
+    for (int octave = 0; octave < 5; ++octave) {
+        value += amplitude * (2.0f * value_noise(x, y) - 1.0f);
+        const float next_x = 1.6f * x + 1.2f * y + 7.1f;
+        y = -1.2f * x + 1.6f * y + 19.3f;
+        x = next_x;
+        amplitude *= 0.5f;
+    }
+    return value;
+}
+
+__device__ float3 marble_albedo(float3 point) {
+    const float x = point.x * 0.7f;
+    const float y = point.y * 0.7f;
+    const float warp_x = fractal_noise(x + 3.1f, y - 7.4f);
+    const float warp_y = fractal_noise(x - 5.8f, y + 1.6f);
+    const float flow = fractal_noise(x + 2.0f * warp_x, y + 2.0f * warp_y);
+    const float vein = powf(0.5f + 0.5f * sinf(2.8f * point.x + 1.6f * point.y + 6.0f * flow), 12.0f);
+    const float3 stone = (0.90f + 0.07f * warp_x) * float3{1.0f, 0.98f, 0.96f};
+    return (1.0f - vein) * stone + vein * float3{0.12f, 0.16f, 0.20f};
 }
 
 __device__ float3 fractal_wall_albedo(float3 point, bool julia, float depth = 2 * room_half_depth,
@@ -508,13 +532,15 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool 
             wall == 4 ? float3{0.10f, 0.65f, 0.16f} : float3{0.75f, 0.75f, 0.75f};
         const auto surface = settings ? settings->surfaces[wall].kind :
             !detail ? SurfaceKind::color : wall == 0 ? SurfaceKind::tiles :
-            wall == 2 ? SurfaceKind::wood : wall == 3 ? SurfaceKind::mandelbrot :
+            wall == 1 ? SurfaceKind::wood : wall == 2 ? SurfaceKind::marble : wall == 3 ? SurfaceKind::mandelbrot :
             wall == 4 ? SurfaceKind::julia : SurfaceKind::color;
         if (settings) hit.albedo = vector3(settings->surfaces[wall].color);
         if (surface == SurfaceKind::tiles) {
             apply_floor_tiles(hit, ray);
         } else if (surface == SurfaceKind::wood) {
-            hit.albedo = wood_albedo(point);
+            hit.albedo = wood_albedo(wall == 1 ? float3{point.x, point.z, 0.0f} : point);
+        } else if (surface == SurfaceKind::marble) {
+            hit.albedo = marble_albedo(point);
         } else if (surface == SurfaceKind::mandelbrot || surface == SurfaceKind::julia) {
             hit.albedo = fractal_wall_albedo(point, surface == SurfaceKind::julia, 2 * half_depth, height);
         }

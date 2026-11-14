@@ -127,10 +127,12 @@ The scene fits the mesh in the center of the Cornell box and places a mirror
 sphere and a glass sphere alongside it. The suspended emissive torus is the
 light source, including for direct lighting, reflections and refractions.
 The floor has procedural tiles with pronounced recessed-looking grout, using bump
-mapping rather than displaced geometry. The back wall has procedural wood grain;
+mapping rather than displaced geometry. The back wall has pale marble with
+dark blue-gray veins, formed by domain-warped fractal noise. The wood grain
+is on the ceiling, mapped across X/Z rather than the back wall's X/Y;
 the red left wall displays the Mandelbrot set and the green right wall a Julia set.
 These textures are procedural and need no image files. The mesh uses a cool blue,
-glossy Phong material to stand out against the wood.
+glossy Phong material to stand out against the marble.
 Its fitting dimensions differ from
 the classic scene, and large meshes need additional GPU memory and render time.
 The original scene remains the default and is also selectable with
@@ -154,8 +156,8 @@ The detail file refers to the separately downloaded dragon; edit its mesh path
 or use `--mesh` to override it. The built-in aliases locate the source-tree
 scene directory recorded by CMake, independently of the working directory.
 
-The versioned `hipscene 1` format follows [grammer.txt](grammer.txt); see
-[example.txt](example.txt) for a complete example. Sections and fields must appear
+See [scenes/detail.hipscene](scenes/detail.hipscene) for a complete
+`hipscene 1` example. Sections and fields must appear
 in the documented order: image, sampling, camera, room, material definitions,
 one light, then objects. Arbitrary whitespace is allowed; comments are not
 part of version 1. Strings support `\"` and `\\` escapes.
@@ -171,6 +173,23 @@ Scene files control:
 - One ceiling rectangle or emissive torus, including radiance and dimensions.
 - Any number of spheres, tilted tori, and independently fitted/materialed PLY meshes.
   `cat` and `crystal` insert the original procedural models at their original positions.
+
+The detail room selects its textures directly in the description:
+
+```text
+room {
+    size [6, 4, 5]
+    floor tiles_detail
+    ceiling wood_detail
+    back marble_detail
+    left mandelbrot_detail
+    right julia_detail
+}
+```
+
+Every surface also accepts `color [r, g, b]`. `wood_detail` remains supported
+on the back wall for existing descriptions. Marble and wood are evaluated on
+the GPU from the hit position, without image assets or changes to geometry.
 
 `tilt_x` is in degrees. Rectangle centers and sizes use X/Z coordinates and
 full extents; room sizes are also full extents, with the floor at Y=0.

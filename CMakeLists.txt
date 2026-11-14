@@ -265,8 +265,7 @@ if(MSVC)
     set_property(TARGET scene_description_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 add_test(NAME scene_description_tests COMMAND scene_description_tests
-    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene"
-    "${CMAKE_CURRENT_SOURCE_DIR}/example.txt")
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
 add_custom_target(
     run
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"

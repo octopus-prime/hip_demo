@@ -630,17 +630,60 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
         fabsf(positive_edge.distance - 1.0f) > 0.0001f) {
         failed |= 64;
     }
-    Hit wood{}, wood_repeat{}, wood_other{}, classic_back{};
+    Hit wood{}, wood_repeat{}, marble{}, marble_repeat{}, marble_backside{}, classic_back{};
+    const Ray ceiling_ray{{0.4f, 3.8f, 0.2f}, {0.0f, 1.0f, 0.0f}};
     const Ray back_ray{{0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}};
-    if (!hit_room(back_ray, 10.0f, wood, true) ||
-        !hit_room({{0.0f, 2.0f, 1.0f}, {0.0f, 0.0f, -1.0f}}, 10.0f, wood_repeat, true) ||
-        !hit_room({{0.1f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}}, 10.0f, wood_other, true) ||
-        !hit_room(back_ray, 10.0f, classic_back) ||
-        wood.material != Material::diffuse || wood.tiled_floor || wood.normal.z != 1.0f ||
-        wood.albedo.x != wood_repeat.albedo.x || fabsf(wood.albedo.x - wood_other.albedo.x) < 0.01f ||
+    float wood_minimum = 1.0f, wood_maximum = 0.0f;
+    for (int i = 0; i <= 20; ++i) {
+        Hit sample{};
+        if (!hit_room({{0.4f, 3.8f, -2.0f + i * 0.2f}, {0.0f, 1.0f, 0.0f}},
+                      10.0f, sample, true, scene.settings)) {
+            failed |= 128;
+        }
+        wood_minimum = fminf(wood_minimum, sample.albedo.x);
+        wood_maximum = fmaxf(wood_maximum, sample.albedo.x);
+    }
+    if (!hit_room(ceiling_ray, 10.0f, wood, true, scene.settings) ||
+        !hit_room({{0.4f, 3.0f, 0.2f}, {0.0f, 1.0f, 0.0f}}, 10.0f, wood_repeat, true, scene.settings) ||
+        wood.material != Material::diffuse || wood.tiled_floor || wood.normal.y != -1.0f ||
+        wood.albedo.x != wood_repeat.albedo.x || wood_maximum - wood_minimum < 0.03f ||
         !(wood.albedo.x > wood.albedo.y && wood.albedo.y > wood.albedo.z) ||
-        classic_back.albedo.x != 0.75f || classic_back.albedo.y != 0.75f) {
+        fabsf(wood.distance - 0.2f) > 0.0001f) {
         failed |= 128;
+    }
+    float marble_minimum = 1.0f, marble_maximum = 0.0f;
+    float variation_x = 0.0f, variation_y = 0.0f;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 20; ++x) {
+            Hit sample{};
+            if (!hit_room({{-2.85f + x * 0.3f, 0.1f + y * 0.25f, 0.0f}, {0.0f, 0.0f, -1.0f}},
+                          10.0f, sample, true, scene.settings) ||
+                sample.material != Material::diffuse || sample.tiled_floor || sample.normal.z != 1.0f ||
+                !isfinite(sample.albedo.x) || !isfinite(sample.albedo.y) || !isfinite(sample.albedo.z) ||
+                sample.albedo.x < 0.0f || sample.albedo.y < 0.0f || sample.albedo.z < 0.0f ||
+                sample.albedo.x > 1.0f || sample.albedo.y > 1.0f || sample.albedo.z > 1.0f) {
+                failed |= 1024;
+            }
+            marble_minimum = fminf(marble_minimum, sample.albedo.x);
+            marble_maximum = fmaxf(marble_maximum, sample.albedo.x);
+            variation_x = fmaxf(variation_x,
+                fabsf(sample.albedo.x - marble_albedo(sample.point + float3{0.1f, 0, 0}).x));
+            variation_y = fmaxf(variation_y,
+                fabsf(sample.albedo.x - marble_albedo(sample.point + float3{0, 0.1f, 0}).x));
+            if (fabsf(sample.albedo.x - marble_albedo(sample.point + float3{0.0001f, 0, 0}).x) > 0.02f) {
+                failed |= 1024;
+            }
+        }
+    }
+    if (!hit_room(back_ray, 10.0f, marble, true, scene.settings) ||
+        !hit_room({{0.0f, 2.0f, 1.0f}, {0.0f, 0.0f, -1.0f}}, 10.0f, marble_repeat, true, scene.settings) ||
+        !hit_room({{0.0f, 2.0f, -3.5f}, {0.0f, 0.0f, 1.0f}}, 10.0f, marble_backside, true, scene.settings) ||
+        !hit_room(back_ray, 10.0f, classic_back) ||
+        marble.albedo.x != marble_repeat.albedo.x || marble.albedo.x != marble_backside.albedo.x ||
+        marble_backside.front_face || marble_backside.normal.z != -1.0f ||
+        marble_minimum > 0.35f || marble_maximum < 0.75f || variation_x < 0.1f || variation_y < 0.1f ||
+        classic_back.albedo.x != 0.75f || classic_back.albedo.y != 0.75f) {
+        failed |= 1024;
     }
     Hit mandelbrot_inside{}, mandelbrot_outside{}, julia_inside{}, julia_outside{}, classic_left{}, classic_right{};
     const auto side_ray = [](float direction, float z) {
@@ -705,6 +748,15 @@ __global__ void check_described_scene(TraceScene scene, unsigned int* failure) {
     }
     if (scene.settings->camera_position.z != 12 || scene.settings->half_view_height != 0.4f ||
         scene.settings->light.radiance.y != 4) failed |= 32;
+    Hit ceiling{}, back{};
+    if (scene.settings->surfaces[1].kind != SurfaceKind::wood ||
+        scene.settings->surfaces[2].kind != SurfaceKind::marble) {
+        failed |= 64;
+    }
+    if (!hit_scene({{3, 5, 4}, {0, 1, 0}}, ceiling, scene) || ceiling.material != Material::diffuse ||
+        fabsf(ceiling.albedo.x - wood_albedo({3, 4, 0}).x) > 0.001f) failed |= 128;
+    if (!hit_scene({{3, 3, 0}, {0, 0, -1}}, back, scene) || back.material != Material::diffuse ||
+        fabsf(back.albedo.x - marble_albedo({3, 3, -5}).x) > 0.001f) failed |= 256;
     *failure = failed;
 }
 
