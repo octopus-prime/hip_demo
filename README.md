@@ -202,6 +202,11 @@ objects
 This is an outline, not a complete scene. Field order matters; use the supplied
 files as examples. Comments are not supported. Strings support `\"` and `\\`
 escapes; Windows paths inside scene strings need escaped backslashes.
+Whitespace around punctuation is optional (`csg{` and `csg {` are equivalent);
+words must retain their token boundaries (`catcrystal` is not two objects).
+Syntax is parsed into an AST first. Value ranges, material references and other
+semantic constraints are checked when building the renderer's scene model;
+errors identify the source file, line and column of the relevant scene block.
 
 Scenes control camera position/target/view size, room dimensions and surfaces,
 named diffuse/metal/glass/Phong materials, one rectangle or torus light, and any

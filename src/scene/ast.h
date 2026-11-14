@@ -13,47 +13,63 @@ namespace scene_ast {
 // Byte offsets into Scene::text remain valid when the AST is copied or moved.
 using Position = std::size_t;
 
+struct Vector {
+    double x = 0, y = 0, z = 0;
+};
+
+struct MaterialValue {
+    Vector albedo;
+    Material kind = Material::diffuse;
+    double roughness = 1;
+};
+
+struct Surface {
+    Vector color;
+    SurfaceKind kind = SurfaceKind::color;
+};
+
 struct Camera {
     Position where;
-    SceneVector position, target;
-    float half_view_height;
+    Vector position, target;
+    double half_view_height;
 };
 
 struct Room {
-    SceneVector size;
-    SceneSurface floor, ceiling, back, left, right;
+    Position where;
+    Vector size;
+    Surface floor, ceiling, back, left, right;
 };
 
 struct NamedMaterial {
     Position where;
     std::string name;
-    SceneMaterial value;
+    MaterialValue value;
 };
 
 struct RectangleLight {
     Position where;
-    std::array<float, 2> center, size;
-    SceneVector radiance;
+    std::array<double, 2> center, size;
+    Vector radiance;
 };
 
 struct TorusLight {
     Position where;
-    SceneVector center;
-    float major_radius, minor_radius;
-    SceneVector radiance;
+    Vector center;
+    double major_radius, minor_radius;
+    Vector radiance;
 };
 
 struct Sphere {
     Position where;
-    SceneVector center;
-    float radius;
+    Vector center;
+    double radius;
     std::string material;
 };
 
 struct Torus {
     Position where;
-    SceneVector center;
-    float major_radius, minor_radius, tilt_x;
+    Vector center;
+    double major_radius, minor_radius, tilt_x;
     std::string material;
 };
 
@@ -61,15 +77,15 @@ struct Mesh {
     Position where;
     std::string file;
     MeshUp up;
-    SceneVector fit, position;
+    Vector fit, position;
     std::string material;
 };
 
 struct Text {
     Position where;
     std::string font, value;
-    float size, depth;
-    SceneVector position;
+    double size, depth;
+    Vector position;
     std::string material;
 };
 

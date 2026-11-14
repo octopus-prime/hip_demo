@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -21,9 +22,9 @@ std::string replace(std::string text, const std::string& before, const std::stri
     return text;
 }
 
-void rejects(const std::string& text, const char* reason) {
+void expect_error(auto&& action, const char* reason) {
     try {
-        parse_scene_description(text, "invalid.hipscene");
+        action();
     } catch (const std::runtime_error& error) {
         const std::string message = error.what();
         if (message.find("invalid.hipscene:") != 0 || message.find(reason) == std::string::npos) {
@@ -32,6 +33,10 @@ void rejects(const std::string& text, const char* reason) {
         return;
     }
     throw std::runtime_error("invalid scene accepted");
+}
+
+void rejects(const std::string& text, const char* reason) {
+    expect_error([&] { parse_scene_description(text, "invalid.hipscene"); }, reason);
 }
 
 scene_ast::Scene detached_ast(std::string text, std::string source) {
@@ -43,6 +48,11 @@ scene_ast::Scene detached_ast(std::string text, std::string source) {
     text.assign(text.size(), 'x');
     source.assign(source.size(), 'x');
     return scene_ast::Scene(std::move(copied));
+}
+
+void rejects_build(const std::string& text, const char* reason) {
+    const auto ast = detached_ast(text, "invalid.hipscene");
+    expect_error([&] { build_scene_description(ast); }, reason);
 }
 }
 
@@ -134,8 +144,12 @@ csg {
                 csg_scene.csgs[0].material.kind == Material::metal &&
                 csg_scene.csgs[0].leaf_count == 3, "nested CSG AST survives source ownership changes");
         rejects(text + replace(csg, "material blue", "material missing"), "unknown material");
-        rejects(text + replace(csg, "minor_radius 0.2", "minor_radius 1.2"), "minor_radius");
-        rejects(text + replace(csg, "radius 0.7", "radius 0"), "positive");
+        rejects_build(text + replace(csg, "minor_radius 0.2", "minor_radius 1.2"), "minor_radius");
+        rejects_build(text + replace(csg, "radius 0.7", "radius 0"), "positive");
+        const auto compact_csg = parse_scene_description(text + replace(csg, "csg {", "csg{"));
+        require(compact_csg.csgs.size() == 1, "CSG literal allows adjacent punctuation");
+        rejects(text + replace(csg, "csg {", "csgfoo {"), "expected '{'");
+        rejects(text + replace(csg, "union {", "unionfoo {"), "expected '{'");
         rejects(text + replace(csg, "difference {", "unknown {"), "CSG");
         rejects(text + replace(csg, "        sphere { center [0, 1, 1] radius 0.7 }", ""), "CSG");
         const auto demo = load_scene_description(
@@ -147,23 +161,38 @@ csg {
         require(loaded_text.texts[0].font ==
                     (text_fixture.parent_path() / "fonts" / "example.ttf").lexically_normal().string(),
                 "font paths resolve relative to scene");
-        rejects(text + replace(text_object, "depth 0.2", "depth 0"), "positive");
-        rejects(text + replace(text_object, "size 1.5", "size -1"), "positive");
+        rejects_build(text + replace(text_object, "depth 0.2", "depth 0"), "positive");
+        rejects_build(text + replace(text_object, "size 1.5", "size -1"), "positive");
         rejects(text + replace(text_object, "material blue", "material missing"), "unknown material");
-        rejects(text + replace(text_object, "\"BO S\"", "\"\""), "must not be empty");
+        rejects_build(text + replace(text_object, "\"BO S\"", "\"\""), "must not be empty");
+        rejects(text + replace(text_object, "BO S", std::string("B\0S", 3)), "expected ");
+        rejects_build(text + replace(text_object, "font.ttf", ""), "must not be empty");
+        rejects_build(text + replace(text_object, "size 1.5", "size 1e-300"), "positive");
         rejects(replace(text, "camera {", "image { size [17, 9] output \"x.bmp\" }\ncamera {"), "camera");
         rejects(replace(text, "camera {", "sampling fixed { count 3 batch 2 }\ncamera {"), "camera");
         rejects(replace(text, "hipscene 1", "hipscene 2"), "invalid.hipscene:1:10: expected ");
-        rejects(replace(text, "radius 0.3", "radius -0.3"), "positive");
-        rejects(replace(text, "roughness 0.3", "roughness 1.3"), "roughness");
+        rejects_build(replace(text, "radius 0.3", "radius -0.3"), "positive");
+        rejects_build(replace(text, "roughness 0.3", "roughness 1.3"), "roughness");
         rejects(replace(text, "material red\n}", "material missing\n}"), "unknown material");
         rejects(replace(text, "material blue =", "material red ="), "duplicate material");
         rejects(replace(text, "up y", "up x"), "mesh up");
-        rejects(replace(text, "radiance [3, 4, 5]", "radiance [-1, 4, 5]"), "radiance");
-        rejects(replace(text, "radius 0.3", "radius 1e300"), "finite float");
-        rejects(replace(text, "radius 0.3", "radius .3"), "positive number");
-        rejects(replace(text, "radius 0.3", "radius +0.3"), "positive number");
-        rejects(replace(text, "radius 0.3", "radius nan"), "positive number");
+        rejects_build(replace(text, "radiance [3, 4, 5]", "radiance [-1, 4, 5]"), "radiance");
+        rejects_build(replace(text, "radius 0.3", "radius 1e300"), "finite float");
+        rejects(replace(text, "radius 0.3", "radius .3"), "number");
+        rejects(replace(text, "radius 0.3", "radius +0.3"), "number");
+        rejects(replace(text, "radius 0.3", "radius nan"), "number");
+        rejects(replace(text, "radius 0.3", "radius0.3"), "expected ");
+        rejects(replace(text, "material blue =", "materialblue ="), "expected ");
+        rejects_build(replace(text, "half_view_height 0.4", "half_view_height 0"), "positive");
+        rejects_build(replace(text, "size [8, 6, 10]", "size [8, 0, 10]"), "dimensions");
+        rejects_build(replace(text, "floor color [0.2, 0.3, 0.4]", "floor color [1.1, 0.3, 0.4]"), "color");
+        rejects_build(replace(text, "fit [1, 1, 1]", "fit [-1, 1, 1]"), "dimensions");
+        auto modified_ast = detached_ast(text + text_object, "invalid.hipscene");
+        modified_ast.camera.position.x = std::numeric_limits<double>::infinity();
+        expect_error([&] { build_scene_description(modified_ast); }, "finite float");
+        modified_ast.camera.position.x = 0;
+        std::get<scene_ast::Text>(modified_ast.objects.back()).value.assign("B\0S", 3);
+        expect_error([&] { build_scene_description(modified_ast); }, "contain NUL");
         rejects(replace(text, "target [0, 2, 0]", "target [0, 2, 12]"), "camera direction");
         rejects(replace(text, "minor_radius 0.1", "minor_radius 0.7"), "minor_radius");
         rejects(text + "garbage", "expected ");

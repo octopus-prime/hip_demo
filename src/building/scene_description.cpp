@@ -15,26 +15,27 @@
 SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
     using namespace scene_ast;
     const SceneDiagnostics errors{parsed.text, parsed.source};
+    const hip_demo::SceneValues values{errors};
     SceneDescription scene;
     auto& settings = scene.settings;
-    settings.camera_position = parsed.camera.position;
-    settings.camera_target = parsed.camera.target;
-    settings.half_view_height = parsed.camera.half_view_height;
-    const double dx = static_cast<double>(parsed.camera.position.x) - parsed.camera.target.x;
-    const double dz = static_cast<double>(parsed.camera.position.z) - parsed.camera.target.z;
+    settings.camera_position = values.vector(parsed.camera.position, parsed.camera.where);
+    settings.camera_target = values.vector(parsed.camera.target, parsed.camera.where);
+    settings.half_view_height = values.positive(parsed.camera.half_view_height, parsed.camera.where);
+    const double dx = static_cast<double>(settings.camera_position.x) - settings.camera_target.x;
+    const double dz = static_cast<double>(settings.camera_position.z) - settings.camera_target.z;
     if (dx * dx + dz * dz < 1e-12) {
         errors.fail(parsed.camera.where, "camera direction must not be zero or parallel to the Y axis");
     }
-    settings.room_size = parsed.room.size;
-    settings.surfaces[0] = parsed.room.floor;
-    settings.surfaces[1] = parsed.room.ceiling;
-    settings.surfaces[2] = parsed.room.back;
-    settings.surfaces[3] = parsed.room.left;
-    settings.surfaces[4] = parsed.room.right;
+    settings.room_size = values.dimensions(parsed.room.size, parsed.room.where);
+    settings.surfaces[0] = values.surface(parsed.room.floor, parsed.room.where);
+    settings.surfaces[1] = values.surface(parsed.room.ceiling, parsed.room.where);
+    settings.surfaces[2] = values.surface(parsed.room.back, parsed.room.where);
+    settings.surfaces[3] = values.surface(parsed.room.left, parsed.room.where);
+    settings.surfaces[4] = values.surface(parsed.room.right, parsed.room.where);
 
     std::map<std::string, SceneMaterial> materials;
     for (const auto& material : parsed.materials) {
-        if (!materials.emplace(material.name, material.value).second) {
+        if (!materials.emplace(material.name, values.material(material.value, material.where)).second) {
             errors.fail(material.where, "duplicate material '" + material.name + "'");
         }
     }
@@ -43,62 +44,46 @@ SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
         if (found == materials.end()) errors.fail(object.where, "unknown material '" + object.material + "'");
         return found->second;
     };
-    const auto check_radii = [&](const auto& torus) {
-        if (torus.minor_radius >= torus.major_radius) {
-            errors.fail(torus.where, "minor_radius must be less than major_radius");
-        }
-    };
     auto& light = settings.light;
     std::visit([&](const auto& source) {
-        light.radiance = source.radiance;
+        light.radiance = values.radiance(source.radiance, source.where);
         if constexpr (std::is_same_v<std::decay_t<decltype(source)>, RectangleLight>) {
-            light.center = {source.center[0], settings.room_size.y, source.center[1]};
-            light.width = source.size[0];
-            light.depth = source.size[1];
-            if (light.width <= 0 || light.depth <= 0) errors.fail(source.where, "light dimensions must be positive");
+            light.center = {values.scalar(source.center[0], source.where), settings.room_size.y,
+                            values.scalar(source.center[1], source.where)};
+            light.width = values.positive(source.size[0], source.where);
+            light.depth = values.positive(source.size[1], source.where);
             if (std::abs(light.center.x) + light.width / 2 > settings.room_size.x / 2 ||
                 std::abs(light.center.z) + light.depth / 2 > settings.room_size.z / 2) {
                 errors.fail(source.where, "ceiling light must fit inside the room");
             }
         } else {
-            check_radii(source);
+            const auto sizes = values.radii(source.major_radius, source.minor_radius, source.where);
             light.torus = true;
-            light.center = source.center;
-            light.major_radius = source.major_radius;
-            light.minor_radius = source.minor_radius;
+            light.center = values.vector(source.center, source.where);
+            light.major_radius = sizes[0];
+            light.minor_radius = sizes[1];
         }
     }, parsed.light);
     for (const auto& object : parsed.objects) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, Sphere> || std::is_same_v<T, Torus>) {
-                ScenePrimitive primitive;
-                primitive.center = value.center;
+                auto primitive = values.primitive(value);
                 primitive.material = material_reference(value);
-                if constexpr (std::is_same_v<T, Sphere>) {
-                    primitive.radius = value.radius;
-                } else {
-                    check_radii(value);
-                    primitive.sphere = false;
-                    primitive.major_radius = value.major_radius;
-                    primitive.minor_radius = value.minor_radius;
-                    const double angle = static_cast<double>(value.tilt_x) * 3.141592653589793 / 180;
-                    primitive.tilt_sine = static_cast<float>(std::sin(angle));
-                    primitive.tilt_cosine = static_cast<float>(std::cos(angle));
-                }
                 scene.primitives.push_back(primitive);
             } else if constexpr (std::is_same_v<T, Csg>) {
                 hip_demo::append_csg(scene, value, material_reference(value), errors);
             } else if constexpr (std::is_same_v<T, Text>) {
-                scene.texts.push_back({value.font, value.value, value.size, value.depth,
-                                       value.position, material_reference(value)});
+                scene.texts.push_back({values.string(value.font, value.where), values.string(value.value, value.where),
+                                       values.positive(value.size, value.where), values.positive(value.depth, value.where),
+                                       values.vector(value.position, value.where), material_reference(value)});
             } else {
                 SceneMesh mesh;
                 if constexpr (std::is_same_v<T, Mesh>) {
-                    mesh.file = value.file;
+                    mesh.file = values.string(value.file, value.where);
                     mesh.up = value.up;
-                    mesh.fit = value.fit;
-                    mesh.position = value.position;
+                    mesh.fit = values.dimensions(value.fit, value.where);
+                    mesh.position = values.vector(value.position, value.where);
                     mesh.material = material_reference(value);
                 } else {
                     mesh.kind = value;

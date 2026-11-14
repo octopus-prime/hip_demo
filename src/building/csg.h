@@ -1,10 +1,6 @@
 #pragma once
 
-#include "scene/ast.h"
-#include "parsing/diagnostics.h"
-
-#include <cmath>
-#include <type_traits>
+#include "building/scene_values.h"
 
 namespace hip_demo {
 
@@ -27,22 +23,8 @@ inline void append_csg(SceneDescription& scene, const scene_ast::Csg& source,
         }
         if (scene.csg_leaves.size() >= csg_outside)
             errors.fail(node.where, "CSG exceeds the leaf index limit");
-        ScenePrimitive primitive;
-        std::visit([&](const auto& shape) {
-            primitive.center = shape.center;
-            using T = std::decay_t<decltype(shape)>;
-            if constexpr (std::is_same_v<T, scene_ast::Sphere>) {
-                primitive.radius = shape.radius;
-            } else {
-                if (shape.minor_radius >= shape.major_radius)
-                    errors.fail(shape.where, "minor_radius must be less than major_radius");
-                primitive.sphere = false;
-                primitive.major_radius = shape.major_radius;
-                primitive.minor_radius = shape.minor_radius;
-                const double angle = static_cast<double>(shape.tilt_x) * 3.141592653589793 / 180;
-                primitive.tilt_sine = static_cast<float>(std::sin(angle));
-                primitive.tilt_cosine = static_cast<float>(std::cos(angle));
-            }
+        const auto primitive = std::visit([&](const auto& shape) {
+            return SceneValues{errors}.primitive(shape);
         }, node.shape);
         const auto index = static_cast<std::uint32_t>(scene.csg_leaves.size());
         scene.csg_leaves.push_back({primitive, yes, no});

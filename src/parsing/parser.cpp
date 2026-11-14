@@ -4,8 +4,6 @@
 
 #include <boost/parser/parser.hpp>
 
-#include <cmath>
-#include <limits>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -13,48 +11,52 @@
 namespace {
 namespace bp = boost::parser;
 using Position = std::string_view::const_iterator;
+using scene_ast::Vector;
+using scene_ast::MaterialValue;
+using scene_ast::Surface;
 
 struct Camera {
     Position where;
-    SceneVector position, target;
-    float half_view_height;
+    Vector position, target;
+    double half_view_height;
 };
 
 struct Room {
-    SceneVector size;
-    SceneSurface floor, ceiling, back, left, right;
+    Position where;
+    Vector size;
+    Surface floor, ceiling, back, left, right;
 };
 
 struct NamedMaterial {
     Position where;
     std::string name;
-    SceneMaterial value;
+    MaterialValue value;
 };
 
 struct RectangleLight {
     Position where;
-    std::array<float, 2> center, size;
-    SceneVector radiance;
+    std::array<double, 2> center, size;
+    Vector radiance;
 };
 
 struct TorusLight {
     Position where;
-    SceneVector center;
-    float major_radius, minor_radius;
-    SceneVector radiance;
+    Vector center;
+    double major_radius, minor_radius;
+    Vector radiance;
 };
 
 struct Sphere {
     Position where;
-    SceneVector center;
-    float radius;
+    Vector center;
+    double radius;
     std::string material;
 };
 
 struct Torus {
     Position where;
-    SceneVector center;
-    float major_radius, minor_radius, tilt_x;
+    Vector center;
+    double major_radius, minor_radius, tilt_x;
     std::string material;
 };
 
@@ -62,15 +64,15 @@ struct Mesh {
     Position where;
     std::string file;
     MeshUp up;
-    SceneVector fit, position;
+    Vector fit, position;
     std::string material;
 };
 
 struct Text {
     Position where;
     std::string font, value;
-    float size, depth;
-    SceneVector position;
+    double size, depth;
+    Vector position;
     std::string material;
 };
 
@@ -125,14 +127,6 @@ struct SceneErrors {
     }
 };
 
-template <typename Predicate>
-auto checked(Predicate predicate, std::string_view message) {
-    return [=](auto& context) {
-        if (!predicate(bp::_attr(context))) bp::_report_error(context, message);
-        bp::_val(context) = bp::_attr(context);
-    };
-}
-
 const auto letter = bp::char_('a', 'z') | bp::char_('A', 'Z');
 const auto identifier_char = letter | bp::digit | bp::char_('_');
 const auto number_syntax = -bp::char_('-') >> +bp::digit >>
@@ -145,29 +139,24 @@ auto keyword(const char* word) {
 bp::rule<struct position_p_, Position> position_p = "source position";
 bp::rule<struct identifier_p_, std::string> identifier_p = "identifier";
 bp::rule<struct string_p_, std::string> string_p = "quoted string";
-bp::rule<struct scalar_p_, float> scalar_p = "finite number";
-bp::rule<struct positive_p_, float> positive_p = "positive number";
-bp::rule<struct vector2_p_, std::array<float, 2>> vector2_p = "2D vector";
-bp::rule<struct vector_p_, SceneVector> vector_p = "3D vector";
-bp::rule<struct dimensions_p_, SceneVector> dimensions_p = "positive dimensions";
-bp::rule<struct color_p_, SceneVector> color_p = "color";
-bp::rule<struct radiance_p_, SceneVector> radiance_p = "radiance";
-bp::rule<struct roughness_p_, float> roughness_p = "roughness";
+bp::rule<struct scalar_p_, double> scalar_p = "number";
+bp::rule<struct vector2_p_, std::array<double, 2>> vector2_p = "2D vector";
+bp::rule<struct vector_p_, Vector> vector_p = "3D vector";
 bp::rule<struct camera_p_, Camera> camera_p = "camera";
-bp::rule<struct surface_p_, SceneSurface> surface_p = "color surface";
-bp::rule<struct wood_p_, SceneSurface> wood_p = "wood surface";
-bp::rule<struct marble_p_, SceneSurface> marble_p = "marble surface";
-bp::rule<struct floor_p_, SceneSurface> floor_p = "floor surface";
-bp::rule<struct ceiling_p_, SceneSurface> ceiling_p = "ceiling surface";
-bp::rule<struct back_p_, SceneSurface> back_p = "back surface";
-bp::rule<struct left_p_, SceneSurface> left_p = "left surface";
-bp::rule<struct right_p_, SceneSurface> right_p = "right surface";
+bp::rule<struct surface_p_, Surface> surface_p = "color surface";
+bp::rule<struct wood_p_, Surface> wood_p = "wood surface";
+bp::rule<struct marble_p_, Surface> marble_p = "marble surface";
+bp::rule<struct floor_p_, Surface> floor_p = "floor surface";
+bp::rule<struct ceiling_p_, Surface> ceiling_p = "ceiling surface";
+bp::rule<struct back_p_, Surface> back_p = "back surface";
+bp::rule<struct left_p_, Surface> left_p = "left surface";
+bp::rule<struct right_p_, Surface> right_p = "right surface";
 bp::rule<struct room_p_, Room> room_p = "room";
-bp::rule<struct diffuse_p_, SceneMaterial> diffuse_p = "diffuse material";
-bp::rule<struct phong_p_, SceneMaterial> phong_p = "Phong material";
-bp::rule<struct metal_p_, SceneMaterial> metal_p = "metal material";
-bp::rule<struct glass_p_, SceneMaterial> glass_p = "glass material";
-bp::rule<struct shader_p_, SceneMaterial> shader_p = "material kind";
+bp::rule<struct diffuse_p_, MaterialValue> diffuse_p = "diffuse material";
+bp::rule<struct phong_p_, MaterialValue> phong_p = "Phong material";
+bp::rule<struct metal_p_, MaterialValue> metal_p = "metal material";
+bp::rule<struct glass_p_, MaterialValue> glass_p = "glass material";
+bp::rule<struct shader_p_, MaterialValue> shader_p = "material kind";
 bp::rule<struct material_p_, NamedMaterial> material_p = "named material";
 bp::rule<struct rectangle_light_p_, RectangleLight> rectangle_light_p = "ceiling rectangle light";
 bp::rule<struct torus_light_p_, TorusLight> torus_light_p = "torus light";
@@ -189,78 +178,55 @@ bp::rule<struct scene_p_, ParsedScene> scene_p = "hipscene 1 scene";
 auto position_p_def = bp::eps[([](auto& context) { bp::_val(context) = bp::_where(context).begin(); })];
 auto identifier_p_def = bp::lexeme[letter >> *identifier_char];
 auto string_p_def = bp::lexeme['"' >>
-    *((bp::lit('\\') >> bp::char_("\"\\")) | (bp::char_ - bp::char_("\"\\\r\n"))) > '"']
-    [checked([](const std::string& value) { return !value.empty() && value.find('\0') == std::string::npos; },
-             "strings must not be empty or contain NUL")];
-auto scalar_p_def = bp::lexeme[&(number_syntax >> !(identifier_char | bp::char_("+.-"))) >> bp::double_]
-    [([](auto& context) {
-        const double value = bp::_attr(context);
-        if (!std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max()) {
-            bp::_report_error(context, "number is outside the finite float range");
-        }
-        bp::_val(context) = static_cast<float>(value);
-    })];
-auto positive_p_def = scalar_p[checked([](float value) { return value > 0; }, "value must be positive")];
+    *((bp::lit('\\') >> bp::char_("\"\\")) | (bp::char_ - bp::char_("\"\\\r\n"))) > '"'];
+auto scalar_p_def = bp::lexeme[&(number_syntax >> !(identifier_char | bp::char_("+.-"))) >> bp::double_];
 auto vector2_p_def = bp::lit('[') > scalar_p > ',' > scalar_p > ']';
 auto vector_p_def = bp::lit('[') > scalar_p > ',' > scalar_p > ',' > scalar_p > ']';
-auto dimensions_p_def = vector_p[checked([](SceneVector value) {
-    return value.x > 0 && value.y > 0 && value.z > 0;
-}, "all dimensions must be positive")];
-auto color_p_def = vector_p[checked([](SceneVector value) {
-    return value.x >= 0 && value.x <= 1 && value.y >= 0 && value.y <= 1 && value.z >= 0 && value.z <= 1;
-}, "color components must be in [0, 1]")];
-auto radiance_p_def = vector_p[checked([](SceneVector value) {
-    return value.x >= 0 && value.y >= 0 && value.z >= 0;
-}, "radiance must be nonnegative")];
-auto roughness_p_def = scalar_p[checked([](float value) {
-    return value >= 0 && value <= 1;
-}, "roughness must be in [0, 1]")];
-
-auto camera_p_def = position_p >> keyword("camera") > '{'
-    > keyword("position") > vector_p > keyword("target") > vector_p
-    > keyword("half_view_height") > positive_p > '}';
-auto surface_p_def = keyword("color") > color_p > bp::attr(SurfaceKind::color);
-auto wood_p_def = keyword("wood_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::wood});
-auto marble_p_def = keyword("marble_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::marble});
-auto floor_p_def = surface_p | (keyword("tiles_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::tiles}));
+auto camera_p_def = position_p >> bp::lit("camera") > '{'
+    > bp::lit("position") > vector_p > bp::lit("target") > vector_p
+    > keyword("half_view_height") > scalar_p > '}';
+auto surface_p_def = bp::lit("color") > vector_p > bp::attr(SurfaceKind::color);
+auto wood_p_def = keyword("wood_detail") >> bp::attr(Surface{{}, SurfaceKind::wood});
+auto marble_p_def = keyword("marble_detail") >> bp::attr(Surface{{}, SurfaceKind::marble});
+auto floor_p_def = surface_p | (keyword("tiles_detail") >> bp::attr(Surface{{}, SurfaceKind::tiles}));
 auto ceiling_p_def = surface_p | wood_p;
 auto back_p_def = surface_p | wood_p | marble_p;
-auto left_p_def = surface_p | (keyword("mandelbrot_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::mandelbrot}));
-auto right_p_def = surface_p | (keyword("julia_detail") >> bp::attr(SceneSurface{{}, SurfaceKind::julia}));
-auto room_p_def = keyword("room") > '{' > keyword("size") > dimensions_p
+auto left_p_def = surface_p | (keyword("mandelbrot_detail") >> bp::attr(Surface{{}, SurfaceKind::mandelbrot}));
+auto right_p_def = surface_p | (keyword("julia_detail") >> bp::attr(Surface{{}, SurfaceKind::julia}));
+auto room_p_def = position_p >> bp::lit("room") > '{' > bp::lit("size") > vector_p
     > keyword("floor") > floor_p > keyword("ceiling") > ceiling_p > keyword("back") > back_p
     > keyword("left") > left_p > keyword("right") > right_p > '}';
 
-auto diffuse_p_def = keyword("diffuse") > color_p > bp::attr(Material::diffuse) > bp::attr(1.0f);
-auto phong_p_def = keyword("phong") > color_p > bp::attr(Material::phong) > bp::attr(0.0f);
-auto metal_p_def = keyword("metal") > color_p > bp::attr(Material::metal) > keyword("roughness") > roughness_p;
-auto glass_p_def = keyword("glass") > color_p > bp::attr(Material::glass) > bp::attr(0.0f);
+auto diffuse_p_def = bp::lit("diffuse") > vector_p > bp::attr(Material::diffuse) > bp::attr(1.0);
+auto phong_p_def = bp::lit("phong") > vector_p > bp::attr(Material::phong) > bp::attr(0.0);
+auto metal_p_def = bp::lit("metal") > vector_p > bp::attr(Material::metal) > keyword("roughness") > scalar_p;
+auto glass_p_def = bp::lit("glass") > vector_p > bp::attr(Material::glass) > bp::attr(0.0);
 auto shader_p_def = diffuse_p | phong_p | metal_p | glass_p;
 auto material_p_def = position_p >> keyword("material") > identifier_p > '=' > shader_p;
-auto rectangle_light_p_def = position_p >> keyword("ceiling_rectangle") > '{'
-    > keyword("center") > vector2_p > keyword("size") > vector2_p
-    > keyword("radiance") > radiance_p > '}';
-auto torus_light_p_def = position_p >> keyword("torus") > '{'
-    > keyword("center") > vector_p > keyword("major_radius") > positive_p
-    > keyword("minor_radius") > positive_p > keyword("radiance") > radiance_p > '}';
+auto rectangle_light_p_def = position_p >> bp::lit("ceiling_rectangle") > '{'
+    > bp::lit("center") > vector2_p > bp::lit("size") > vector2_p
+    > bp::lit("radiance") > vector_p > '}';
+auto torus_light_p_def = position_p >> bp::lit("torus") > '{'
+    > bp::lit("center") > vector_p > keyword("major_radius") > scalar_p
+    > keyword("minor_radius") > scalar_p > bp::lit("radiance") > vector_p > '}';
 auto light_p_def = keyword("light") > (rectangle_light_p | torus_light_p);
 
-auto sphere_p_def = position_p >> keyword("sphere") > '{'
-    > keyword("center") > vector_p > keyword("radius") > positive_p
+auto sphere_p_def = position_p >> bp::lit("sphere") > '{'
+    > bp::lit("center") > vector_p > keyword("radius") > scalar_p
     > keyword("material") > identifier_p > '}';
-auto torus_p_def = position_p >> keyword("torus") > '{'
-    > keyword("center") > vector_p > keyword("major_radius") > positive_p
-    > keyword("minor_radius") > positive_p > keyword("tilt_x") > scalar_p
+auto torus_p_def = position_p >> bp::lit("torus") > '{'
+    > bp::lit("center") > vector_p > keyword("major_radius") > scalar_p
+    > keyword("minor_radius") > scalar_p > keyword("tilt_x") > scalar_p
     > keyword("material") > identifier_p > '}';
-auto csg_sphere_p_def = position_p >> keyword("sphere") > '{'
-    > keyword("center") > vector_p > keyword("radius") > positive_p > bp::attr(std::string{}) > '}';
-auto csg_torus_p_def = position_p >> keyword("torus") > '{'
-    > keyword("center") > vector_p > keyword("major_radius") > positive_p
-    > keyword("minor_radius") > positive_p > keyword("tilt_x") > scalar_p > bp::attr(std::string{}) > '}';
+auto csg_sphere_p_def = position_p >> bp::lit("sphere") > '{'
+    > bp::lit("center") > vector_p > keyword("radius") > scalar_p > bp::attr(std::string{}) > '}';
+auto csg_torus_p_def = position_p >> bp::lit("torus") > '{'
+    > bp::lit("center") > vector_p > keyword("major_radius") > scalar_p
+    > keyword("minor_radius") > scalar_p > keyword("tilt_x") > scalar_p > bp::attr(std::string{}) > '}';
 auto csg_branch_p_def = position_p >> (
-    (keyword("union") >> bp::attr(CsgOperation::unite)) |
-    (keyword("intersection") >> bp::attr(CsgOperation::intersection)) |
-    (keyword("difference") >> bp::attr(CsgOperation::difference)))
+    (bp::lit("union") >> bp::attr(CsgOperation::unite)) |
+    (bp::lit("intersection") >> bp::attr(CsgOperation::intersection)) |
+    (bp::lit("difference") >> bp::attr(CsgOperation::difference)))
     > '{' > bp::repeat(2)[csg_node_p] > '}';
 auto csg_node_p_def =
     csg_sphere_p[([](auto& context) {
@@ -275,16 +241,16 @@ auto csg_node_p_def =
         auto& branch = bp::_attr(context);
         bp::_val(context) = CsgNode{branch.where, Sphere{}, branch.operation, std::move(branch.children)};
     })];
-auto csg_p_def = position_p >> keyword("csg") > '{'
+auto csg_p_def = position_p >> bp::lit("csg") > '{'
     > keyword("material") > identifier_p > csg_node_p > '}';
 auto mesh_up_p_def = (keyword("y") >> bp::attr(MeshUp::y)) | (keyword("z") >> bp::attr(MeshUp::z));
-auto mesh_p_def = position_p >> keyword("mesh") > '{'
-    > keyword("file") > string_p > keyword("up") > mesh_up_p > keyword("fit") > dimensions_p
-    > keyword("position") > vector_p > keyword("material") > identifier_p > '}';
-auto text_p_def = position_p >> keyword("text") > '{'
-    > keyword("font") > string_p > keyword("value") > string_p
-    > keyword("size") > positive_p > keyword("depth") > positive_p
-    > keyword("position") > vector_p > keyword("material") > identifier_p > '}';
+auto mesh_p_def = position_p >> bp::lit("mesh") > '{'
+    > bp::lit("file") > string_p > keyword("up") > mesh_up_p > bp::lit("fit") > vector_p
+    > bp::lit("position") > vector_p > keyword("material") > identifier_p > '}';
+auto text_p_def = position_p >> bp::lit("text") > '{'
+    > bp::lit("font") > string_p > bp::lit("value") > string_p
+    > keyword("size") > scalar_p > keyword("depth") > scalar_p
+    > bp::lit("position") > vector_p > keyword("material") > identifier_p > '}';
 auto builtin_p_def = (keyword("cat") >> bp::attr(SceneMeshKind::cat)) |
                      (keyword("crystal") >> bp::attr(SceneMeshKind::crystal));
 auto object_p_def = sphere_p | torus_p | mesh_p | text_p | csg_p | builtin_p;
@@ -292,8 +258,7 @@ auto scene_p_def = keyword("hipscene") > keyword("1")
     > camera_p > room_p > *material_p > light_p > *object_p > bp::eoi;
 
 BOOST_PARSER_DEFINE_RULES(
-    position_p, identifier_p, string_p, scalar_p, positive_p, vector2_p, vector_p,
-    dimensions_p, color_p, radiance_p, roughness_p,
+    position_p, identifier_p, string_p, scalar_p, vector2_p, vector_p,
     camera_p, surface_p, wood_p, marble_p, floor_p, ceiling_p, back_p, left_p, right_p, room_p,
     diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
     csg_sphere_p, csg_torus_p, csg_branch_p, csg_node_p, csg_p,
@@ -332,7 +297,7 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
     scene.source = source;
     scene.camera = {offset(parsed.camera.where), parsed.camera.position, parsed.camera.target,
                     parsed.camera.half_view_height};
-    scene.room = {parsed.room.size, parsed.room.floor, parsed.room.ceiling, parsed.room.back,
+    scene.room = {offset(parsed.room.where), parsed.room.size, parsed.room.floor, parsed.room.ceiling, parsed.room.back,
                   parsed.room.left, parsed.room.right};
     for (auto& material : parsed.materials) {
         scene.materials.push_back({offset(material.where), std::move(material.name), material.value});
