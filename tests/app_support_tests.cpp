@@ -17,28 +17,91 @@
 
 namespace {
 
-SceneDescription options(std::vector<std::string> arguments) {
+hip_demo::AppOptions options(std::vector<std::string> arguments) {
     std::vector<char*> argv;
     for (auto& argument : arguments) argv.push_back(argument.data());
     return hip_demo::load_options(static_cast<int>(argv.size()), argv.data());
 }
 
-void check_options(const std::string& fixture) {
+void check_options(const std::string& fixture, std::filesystem::path temporary) {
     const auto original = options({"renderer", "--scene", fixture});
-    const auto changed = options({"renderer", "changed.bmp", "9", "--fixed", "--scene", fixture});
-    if (original.output != "scene_test.bmp" || original.settings.sampling.maximum != 3 ||
-        changed.output != "changed.bmp" || changed.settings.sampling.maximum != 9 ||
-        changed.settings.sampling.adaptive || changed.width != original.width ||
-        changed.primitives.size() != original.primitives.size()) {
-        throw std::runtime_error("CLI overrides did not preserve the scene and replace only supplied settings");
+    const auto changed = options({"renderer", "--output", "changed.bmp", "--samples", "9",
+        "--sampling", "fixed", "--width", "17", "--height", "9", "--scene", fixture});
+    if (original.render.output != "render.png" || original.render.sampling.maximum != 1024 ||
+        changed.render.output != "changed.bmp" || changed.render.sampling.maximum != 9 ||
+        changed.render.sampling.adaptive || changed.render.width != 17 || changed.render.height != 9 ||
+        changed.scene != original.scene) {
+        throw std::runtime_error("CLI render options and scene selection are not independent");
     }
-    try {
-        (void)options({"renderer", "--scene", fixture, "--mesh-up", "z"});
-    } catch (const std::runtime_error& error) {
-        if (std::string(error.what()).find("--mesh-up requires --mesh") != std::string::npos) return;
-        throw;
+    temporary.replace_extension(".cfg");
+    {
+        std::ofstream file(temporary);
+        file << "width = 320\nheight = 200\noutput = images with spaces.png\nsampling = fixed\n"
+                "samples = 11\nmin-samples = 3\nspecular-min-samples = 7\nbatch-size = 4\n"
+                "relative-error = 0.08\nbrightness-floor = 0.03\ndevice = 0\n";
     }
-    throw std::runtime_error("--mesh-up without --mesh was accepted");
+    const auto loaded = options({"renderer", "--config", temporary.string(), "--scene", fixture,
+        "--width", "640", "--samples", "19", "--sampling", "adaptive"});
+    const auto& render = loaded.render;
+    if (render.width != 640 || render.height != 200 || render.output != "images with spaces.png" ||
+        !render.sampling.adaptive || render.sampling.maximum != 19 || render.sampling.minimum != 3 ||
+        render.sampling.specular_minimum != 7 || render.sampling.batch != 4 ||
+        render.sampling.relative_error != 0.08f || render.sampling.brightness_floor != 0.03f || render.device != 0)
+        throw std::runtime_error("CLI > config > defaults precedence failed");
+    auto saved = render;
+    saved.sampling.relative_error = 0.123456791f;
+    hip_demo::save_render_config(saved, temporary.string());
+    const auto restored = options({"renderer", "--config", temporary.string()}).render;
+    if (restored.width != saved.width || restored.height != saved.height || restored.output != saved.output ||
+        restored.sampling.relative_error != saved.sampling.relative_error ||
+        restored.sampling.maximum != saved.sampling.maximum || restored.device != saved.device ||
+        restored.sampling.minimum != saved.sampling.minimum ||
+        restored.sampling.specular_minimum != saved.sampling.specular_minimum ||
+        restored.sampling.batch != saved.sampling.batch ||
+        restored.sampling.brightness_floor != saved.sampling.brightness_floor ||
+        restored.sampling.adaptive != saved.sampling.adaptive)
+        throw std::runtime_error("Saved effective render options did not round-trip");
+    const auto help = options({"renderer", "--help", "--config", "nonexistent.cfg"});
+    if (!help.help || help.help_text.find("--width") == std::string::npos ||
+        help.help_text.find("--save-config") == std::string::npos)
+        throw std::runtime_error("Help must describe options without reading files");
+    const auto rejects = [](std::vector<std::string> arguments) {
+        try { (void)options(arguments); }
+        catch (const std::exception&) { return; }
+        std::string message = "Invalid renderer options were accepted:";
+        for (const auto& argument : arguments) message += " [" + argument + "]";
+        throw std::runtime_error(message);
+    };
+    for (const auto& arguments : std::vector<std::vector<std::string>>{
+        {"renderer", "old.bmp", "9"}, {"renderer", "--fixed"}, {"renderer", "--mesh", "x.ply"},
+        {"renderer", "--wid", "17"}, {"renderer", "--width", "0"}, {"renderer", "--width", "17.5"},
+        {"renderer", "--width", "2147483647"}, {"renderer", "--height", "-1"},
+        {"renderer", "--samples", "0"}, {"renderer", "--batch-size", "0"},
+        {"renderer", "--min-samples", "-1"}, {"renderer", "--specular-min-samples", "0"},
+        {"renderer", "--relative-error", "nan"}, {"renderer", "--brightness-floor", "inf"},
+        {"renderer", "--relative-error", "0"}, {"renderer", "--sampling", "unknown"},
+        {"renderer", "--device", "-2"}, {"renderer", "--output", "bad.jpg"},
+        {"renderer", "--config", "nonexistent.cfg"}, {"renderer", "--save-config", ""},
+        {"renderer", "--scene", ""}, {"renderer", "--width", "1", "--width", "2"}})
+        rejects(arguments);
+    for (const auto* content : {"unknown = 1\n", "scene = detail\n", "width = 1\nwidth = 2\n",
+                                "width = 0\n", "broken syntax\n"}) {
+        { std::ofstream file(temporary); file << content; }
+        rejects({"renderer", "--config", temporary.string()});
+    }
+    bool rejected_save = false;
+    saved.output = "cannot#roundtrip.png";
+    try { hip_demo::save_render_config(saved, temporary.string()); }
+    catch (const std::runtime_error&) { rejected_save = true; }
+    if (!rejected_save) throw std::runtime_error("Config serialization silently accepted a # comment in a path");
+    bool rejected_write = false;
+    try { hip_demo::save_render_config(render, (temporary / "cannot_create.cfg").string()); }
+    catch (const std::runtime_error& error) {
+        if (std::string(error.what()).find("Could not open render config for writing:") == std::string::npos) throw;
+        rejected_write = true;
+    }
+    if (!rejected_write) throw std::runtime_error("An unwritable config path was accepted");
+    std::filesystem::remove(temporary);
 }
 
 void check_bmp(const std::filesystem::path& output) {
@@ -120,7 +183,7 @@ void check_png(std::filesystem::path output) {
 int main(int argc, char** argv) {
     try {
         if (argc != 3) throw std::runtime_error("Expected scene fixture and temporary BMP path");
-        check_options(argv[1]);
+        check_options(argv[1], argv[2]);
         check_bmp(argv[2]);
         check_png(argv[2]);
         std::cout << "CLI and CPU-only BMP/PNG boundary checks passed.\n";

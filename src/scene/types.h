@@ -23,16 +23,6 @@ struct SceneSurface {
     SurfaceKind kind = SurfaceKind::color;
 };
 
-struct SceneSampling {
-    int minimum = 64;
-    int specular_minimum = 256;
-    int maximum = 1024;
-    int batch = 8;
-    float relative_error = 0.05f;
-    float brightness_floor = 0.05f;
-    bool adaptive = true;
-};
-
 struct SceneLight {
     SceneVector center;
     SceneVector radiance;
@@ -48,7 +38,6 @@ struct SceneSettings {
     SceneVector room_size;
     SceneSurface surfaces[5];
     SceneLight light;
-    SceneSampling sampling;
 };
 
 struct ScenePrimitive {
@@ -79,8 +68,6 @@ struct SceneText {
 };
 
 struct SceneDescription {
-    int width = 0, height = 0;
-    std::string output;
     SceneSettings settings;
     std::vector<ScenePrimitive> primitives;
     std::vector<SceneMesh> meshes;

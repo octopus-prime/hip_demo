@@ -15,17 +15,7 @@ SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
     using namespace scene_ast;
     const SceneDiagnostics errors{parsed.text, parsed.source};
     SceneDescription scene;
-    scene.width = parsed.image.width;
-    scene.height = parsed.image.height;
-    scene.output = parsed.image.output;
-    // Both the BMP file format and the kernels use 32-bit sizes/indices.
-    const auto row = (static_cast<std::uint64_t>(scene.width) * 3 + 3) & ~3ull;
-    if (row * scene.height + 54 > std::numeric_limits<std::uint32_t>::max() ||
-        static_cast<std::uint64_t>(scene.width) * scene.height > std::numeric_limits<int>::max()) {
-        errors.fail(parsed.image.where, "image dimensions exceed BMP or renderer limits");
-    }
     auto& settings = scene.settings;
-    settings.sampling = parsed.sampling;
     settings.camera_position = parsed.camera.position;
     settings.camera_target = parsed.camera.target;
     settings.half_view_height = parsed.camera.half_view_height;

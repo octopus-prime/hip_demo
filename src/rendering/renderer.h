@@ -12,11 +12,11 @@ struct GpuImage {
     std::unique_ptr<std::uint32_t, HipBufferDeleter> pixels;
 };
 
-inline GpuImage render_image(TraceScene scene, const SceneDescription& description) {
-    const int image_width = description.width;
-    const int image_height = description.height;
-    const int sample_count = description.settings.sampling.maximum;
-    const bool adaptive = description.settings.sampling.adaptive;
+inline GpuImage render_image(TraceScene scene, const RenderOptions& options) {
+    const int image_width = options.width;
+    const int image_height = options.height;
+    const int sample_count = options.sampling.maximum;
+    const bool adaptive = options.sampling.adaptive;
     const std::size_t pixel_count = static_cast<std::size_t>(image_width) * image_height;
     GpuImage result{image_width, image_height, {}};
     std::uint32_t* allocation = nullptr;
@@ -56,12 +56,12 @@ inline GpuImage render_image(TraceScene scene, const SceneDescription& descripti
     int last_progress = 0;
     std::cout << "Rendering: 0% (0/" << sample_count << " sample passes)" << std::flush;
     for (int first_sample = 0; first_sample < sample_count;) {
-        const int sample_end = first_sample + std::min(description.settings.sampling.batch, sample_count - first_sample);
+        const int sample_end = first_sample + std::min(options.sampling.batch, sample_count - first_sample);
         check_hip(hipEventRecord(start.value, nullptr), "Starting GPU batch timer");
         if (adaptive) {
             hipLaunchKernelGGL(render_adaptive_kernel, grid_size, block_size, 0, 0, result.pixels.get(),
                                adaptive_states.get(), scene, image_width, image_height,
-                               first_sample, sample_end, sample_count);
+                               first_sample, sample_end, sample_count, options.sampling);
         } else {
             hipLaunchKernelGGL(render_kernel, grid_size, block_size, 0, 0, result.pixels.get(),
                                device_sums.get(), scene, image_width, image_height,

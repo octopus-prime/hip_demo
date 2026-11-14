@@ -14,12 +14,6 @@ namespace {
 namespace bp = boost::parser;
 using Position = std::string_view::const_iterator;
 
-struct Image {
-    Position where;
-    int width, height;
-    std::string output;
-};
-
 struct Camera {
     Position where;
     SceneVector position, target;
@@ -84,8 +78,6 @@ using Light = std::variant<RectangleLight, TorusLight>;
 using Object = std::variant<Sphere, Torus, Mesh, Text, SceneMeshKind>;
 
 struct ParsedScene {
-    Image image;
-    SceneSampling sampling;
     Camera camera;
     Room room;
     std::vector<NamedMaterial> materials;
@@ -125,11 +117,6 @@ auto checked(Predicate predicate, std::string_view message) {
     };
 }
 
-template <auto Member>
-const auto assign = [](auto& context) {
-    bp::_val(context).*Member = bp::_attr(context);
-};
-
 const auto letter = bp::char_('a', 'z') | bp::char_('A', 'Z');
 const auto identifier_char = letter | bp::digit | bp::char_('_');
 const auto number_syntax = -bp::char_('-') >> +bp::digit >>
@@ -144,17 +131,12 @@ bp::rule<struct identifier_p_, std::string> identifier_p = "identifier";
 bp::rule<struct string_p_, std::string> string_p = "quoted string";
 bp::rule<struct scalar_p_, float> scalar_p = "finite number";
 bp::rule<struct positive_p_, float> positive_p = "positive number";
-bp::rule<struct integer_p_, int> integer_p = "positive integer";
 bp::rule<struct vector2_p_, std::array<float, 2>> vector2_p = "2D vector";
 bp::rule<struct vector_p_, SceneVector> vector_p = "3D vector";
 bp::rule<struct dimensions_p_, SceneVector> dimensions_p = "positive dimensions";
 bp::rule<struct color_p_, SceneVector> color_p = "color";
 bp::rule<struct radiance_p_, SceneVector> radiance_p = "radiance";
 bp::rule<struct roughness_p_, float> roughness_p = "roughness";
-bp::rule<struct image_p_, Image> image_p = "image";
-bp::rule<struct fixed_p_, SceneSampling> fixed_p = "fixed sampling";
-bp::rule<struct adaptive_p_, SceneSampling> adaptive_p = "adaptive sampling";
-bp::rule<struct sampling_p_, SceneSampling> sampling_p = "fixed or adaptive sampling";
 bp::rule<struct camera_p_, Camera> camera_p = "camera";
 bp::rule<struct surface_p_, SceneSurface> surface_p = "color surface";
 bp::rule<struct wood_p_, SceneSurface> wood_p = "wood surface";
@@ -198,13 +180,6 @@ auto scalar_p_def = bp::lexeme[&(number_syntax >> !(identifier_char | bp::char_(
         bp::_val(context) = static_cast<float>(value);
     })];
 auto positive_p_def = scalar_p[checked([](float value) { return value > 0; }, "value must be positive")];
-auto integer_p_def = bp::uint_[([](auto& context) {
-    const auto value = bp::_attr(context);
-    if (value == 0 || value > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
-        bp::_report_error(context, "integer must be in [1, INT_MAX]");
-    }
-    bp::_val(context) = static_cast<int>(value);
-})];
 auto vector2_p_def = bp::lit('[') > scalar_p > ',' > scalar_p > ']';
 auto vector_p_def = bp::lit('[') > scalar_p > ',' > scalar_p > ',' > scalar_p > ']';
 auto dimensions_p_def = vector_p[checked([](SceneVector value) {
@@ -220,19 +195,6 @@ auto roughness_p_def = scalar_p[checked([](float value) {
     return value >= 0 && value <= 1;
 }, "roughness must be in [0, 1]")];
 
-auto image_p_def = position_p >> keyword("image") > '{'
-    > keyword("size") > '[' > integer_p > ',' > integer_p > ']'
-    > keyword("output") > string_p > '}';
-auto fixed_p_def = keyword("fixed") > '{'
-    > keyword("count") > integer_p[assign<&SceneSampling::maximum>]
-    > keyword("batch") > integer_p[assign<&SceneSampling::batch>] > '}'
-    > bp::eps[([](auto& context) { bp::_val(context).adaptive = false; })];
-auto adaptive_p_def = keyword("adaptive") > '{'
-    > keyword("min") > integer_p > keyword("specular_min") > integer_p
-    > keyword("max") > integer_p > keyword("batch") > integer_p
-    > keyword("relative_error") > positive_p > keyword("brightness_floor") > positive_p
-    > bp::attr(true) > '}';
-auto sampling_p_def = keyword("sampling") > (fixed_p | adaptive_p);
 auto camera_p_def = position_p >> keyword("camera") > '{'
     > keyword("position") > vector_p > keyword("target") > vector_p
     > keyword("half_view_height") > positive_p > '}';
@@ -281,11 +243,11 @@ auto builtin_p_def = (keyword("cat") >> bp::attr(SceneMeshKind::cat)) |
                      (keyword("crystal") >> bp::attr(SceneMeshKind::crystal));
 auto object_p_def = sphere_p | torus_p | mesh_p | text_p | builtin_p;
 auto scene_p_def = keyword("hipscene") > keyword("1")
-    > image_p > sampling_p > camera_p > room_p > *material_p > light_p > *object_p > bp::eoi;
+    > camera_p > room_p > *material_p > light_p > *object_p > bp::eoi;
 
 BOOST_PARSER_DEFINE_RULES(
-    position_p, identifier_p, string_p, scalar_p, positive_p, integer_p, vector2_p, vector_p,
-    dimensions_p, color_p, radiance_p, roughness_p, image_p, fixed_p, adaptive_p, sampling_p,
+    position_p, identifier_p, string_p, scalar_p, positive_p, vector2_p, vector_p,
+    dimensions_p, color_p, radiance_p, roughness_p,
     camera_p, surface_p, wood_p, marble_p, floor_p, ceiling_p, back_p, left_p, right_p, room_p,
     diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
     mesh_up_p, mesh_p, text_p, builtin_p, object_p, scene_p);
@@ -304,9 +266,6 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
     scene_ast::Scene scene;
     scene.text = text;
     scene.source = source;
-    scene.image = {offset(parsed.image.where), parsed.image.width, parsed.image.height,
-                   std::move(parsed.image.output)};
-    scene.sampling = parsed.sampling;
     scene.camera = {offset(parsed.camera.where), parsed.camera.position, parsed.camera.target,
                     parsed.camera.half_view_height};
     scene.room = {parsed.room.size, parsed.room.floor, parsed.room.ceiling, parsed.room.back,

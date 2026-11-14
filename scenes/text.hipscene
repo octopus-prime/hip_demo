@@ -1,17 +1,5 @@
 hipscene 1
 
-image {
-    size [1280, 720]
-    output "text.bmp"
-}
-sampling adaptive {
-    min 32
-    specular_min 64
-    max 256
-    batch 8
-    relative_error 0.05
-    brightness_floor 0.05
-}
 camera {
     position [3, 2.5, 8]
     target [0, 1, 0]

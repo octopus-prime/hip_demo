@@ -13,12 +13,6 @@ namespace scene_ast {
 // Byte offsets into Scene::text remain valid when the AST is copied or moved.
 using Position = std::size_t;
 
-struct Image {
-    Position where;
-    int width, height;
-    std::string output;
-};
-
 struct Camera {
     Position where;
     SceneVector position, target;
@@ -83,8 +77,6 @@ using Light = std::variant<RectangleLight, TorusLight>;
 using Object = std::variant<Sphere, Torus, Mesh, Text, SceneMeshKind>;
 
 struct Scene {
-    Image image;
-    SceneSampling sampling;
     Camera camera;
     Room room;
     std::vector<NamedMaterial> materials;

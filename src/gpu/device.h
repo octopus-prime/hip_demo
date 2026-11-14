@@ -42,15 +42,18 @@ struct SelectedDevice {
     hipDeviceProp_t properties;
 };
 
-inline SelectedDevice select_device() {
+inline SelectedDevice select_device(int requested_device = -1) {
     int device_count = 0;
     check_hip(hipGetDeviceCount(&device_count), "Detecting HIP devices");
     if (device_count == 0) {
         throw std::runtime_error("No HIP-compatible GPU was found.");
     }
+    if (requested_device < -1 || requested_device >= device_count)
+        throw std::runtime_error("Requested HIP device index is out of range.");
     int selected_device = -1;
     hipDeviceProp_t device_properties{};
     for (int device = 0; device < device_count; ++device) {
+        if (requested_device >= 0 && device != requested_device) continue;
         hipDeviceProp_t candidate{};
         check_hip(hipGetDeviceProperties(&candidate, device), "Reading HIP device properties");
         std::string_view compiled_architectures(HIP_DEMO_ARCHITECTURES);
@@ -73,6 +76,8 @@ inline SelectedDevice select_device() {
         }
     }
     if (selected_device < 0) {
+        if (requested_device >= 0)
+            throw std::runtime_error("Requested HIP device does not match the compiled GPU architectures.");
         throw std::runtime_error(
             "No HIP device matches the compiled GPU architectures (" HIP_DEMO_ARCHITECTURES
             "). Reconfigure with HIP_ARCHITECTURE for an available GPU.");

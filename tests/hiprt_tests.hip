@@ -228,7 +228,7 @@ __global__ void check_adaptive_sampling(unsigned int* failures) {
     if (adaptive_converged(stable)) {
         failed |= 16;
     }
-    SceneSampling custom;
+    SamplingOptions custom;
     custom.minimum = 1;
     AdaptivePixel single{};
     add_adaptive_sample(single, {1, 1, 1});
@@ -372,7 +372,8 @@ void check_adaptive_render(TraceScene scene) {
         for (int first = 0; first < cap;) {
             const int end = first + std::min(samples_per_batch, cap - first);
             hipLaunchKernelGGL(render_adaptive_kernel, dim3(3, 2), dim3(8, 8), 0, 0,
-                               adaptive_pixels.get(), states.get(), scene, width, height, first, end, cap);
+                               adaptive_pixels.get(), states.get(), scene, width, height, first, end, cap,
+                               SamplingOptions{});
             check_hip(hipGetLastError(), "Launching adaptive test renderer");
             hipLaunchKernelGGL(render_kernel, dim3(3, 2), dim3(8, 8), 0, 0,
                                fixed_pixels.get(), sums.get(), scene, width, height, first, end, cap);
@@ -965,6 +966,17 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply [scene.hipscene]] | --text font");
         }
         const SelectedDevice device = select_device();
+        if (!text_mode) {
+            if (select_device(device.id).id != device.id)
+                throw std::runtime_error("Explicit HIP device selection changed the requested device");
+            bool rejected = false;
+            try { (void)select_device(2147483647); }
+            catch (const std::runtime_error& error) {
+                if (std::string(error.what()).find("out of range") == std::string::npos) throw;
+                rejected = true;
+            }
+            if (!rejected) throw std::runtime_error("Unavailable HIP device index was accepted");
+        }
         std::cout << "Testing on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
         // Establish the HIP context before HIP RT queries it.

@@ -32,7 +32,8 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
 }
 
 __global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* states, TraceScene scene,
-                                       int width, int height, int first_sample, int sample_end, int sample_count) {
+                                       int width, int height, int first_sample, int sample_end, int sample_count,
+                                       SamplingOptions sampling) {
     const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
     if (x >= width || y >= height) {
@@ -50,7 +51,7 @@ __global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* sta
         add_adaptive_sample(pixel, sample_pixel(x, y, width, height, sample, forward, right, up, scene,
                                                 &pixel.specular));
     }
-    pixel.done = sample_end == sample_count || adaptive_converged(pixel, &scene.settings->sampling);
+    pixel.done = sample_end == sample_count || adaptive_converged(pixel, &sampling);
     if (pixel.done) {
         pixels[pixel_index] = encode_color(pixel.sum / static_cast<float>(pixel.count));
     }

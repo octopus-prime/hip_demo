@@ -2,6 +2,7 @@
 
 #include "math/vector.h"
 #include "scene/defaults.h"
+#include "rendering/options.h"
 #include <cstddef>
 
 namespace hip_demo {
@@ -23,7 +24,7 @@ __device__ inline void add_adaptive_sample(AdaptivePixel& pixel, float3 value) {
     pixel.m2 = pixel.m2 + delta * (value - pixel.mean);
 }
 
-__device__ inline bool adaptive_converged(const AdaptivePixel& pixel, const SceneSampling* sampling = nullptr) {
+__device__ inline bool adaptive_converged(const AdaptivePixel& pixel, const SamplingOptions* sampling = nullptr) {
     const unsigned int minimum = sampling ? (pixel.specular ? sampling->specular_minimum : sampling->minimum) :
         (pixel.specular ? adaptive_specular_min_samples : adaptive_min_samples);
     if (pixel.count < minimum || pixel.count < 2) {

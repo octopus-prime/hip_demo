@@ -1,6 +1,4 @@
 hipscene 1
-image { size [17, 9] output "text_test.bmp" }
-sampling fixed { count 1 batch 1 }
 camera { position [0, 2, 8] target [0, 1, 0] half_view_height 0.4 }
 room {
     size [6, 4, 5]

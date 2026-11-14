@@ -1,12 +1,4 @@
 hipscene 1
-image {
-    size [17, 9]
-    output "scene_test.bmp"
-}
-sampling fixed {
-    count 3
-    batch 2
-}
 camera {
     position [0, 3, 12]
     target [0, 2, 0]

@@ -1,17 +1,5 @@
 hipscene 1
 
-image {
-    size [3840, 2160]
-    output "hiprt_demo.bmp"
-}
-sampling adaptive {
-    min 64
-    specular_min 256
-    max 1024
-    batch 8
-    relative_error 0.05
-    brightness_floor 0.05
-}
 camera {
     position [0, 2, 8.5]
     target [0, 1.8, 0]

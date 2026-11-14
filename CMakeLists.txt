@@ -18,6 +18,21 @@ endif()
 find_package(Boost 1.92 REQUIRED)
 cmake_policy(POP)
 
+# Build the compiled component from the same Boost source distribution as the headers.
+if(NOT EXISTS "${Boost_INCLUDE_DIR}/libs/program_options/src/cmdline.cpp")
+    message(FATAL_ERROR "Boost.Program_options sources were not found. Set Boost_ROOT to a full Boost source distribution.")
+endif()
+set(BOOST_PROGRAM_OPTIONS_SOURCES
+    cmdline config_file convert options_description parsers positional_options
+    split utf8_codecvt_facet value_semantic variables_map winmain)
+list(TRANSFORM BOOST_PROGRAM_OPTIONS_SOURCES PREPEND "${Boost_INCLUDE_DIR}/libs/program_options/src/")
+list(TRANSFORM BOOST_PROGRAM_OPTIONS_SOURCES APPEND ".cpp")
+add_library(boost_program_options STATIC ${BOOST_PROGRAM_OPTIONS_SOURCES})
+add_library(Boost::program_options ALIAS boost_program_options)
+target_link_libraries(boost_program_options PUBLIC Boost::headers)
+target_compile_definitions(boost_program_options PUBLIC BOOST_PROGRAM_OPTIONS_NO_LIB
+    BOOST_PROGRAM_OPTIONS_STATIC_LINK PRIVATE BOOST_PROGRAM_OPTIONS_SOURCE)
+
 include(FetchContent)
 set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
@@ -256,7 +271,8 @@ add_library(text_geometry STATIC src/surface/text.cpp)
 target_include_directories(text_geometry PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(text_geometry PRIVATE freetype)
 add_library(app_support STATIC src/app/options.cpp src/saving/image.cpp src/saving/bmp.cpp src/saving/png.cpp)
-target_link_libraries(app_support PUBLIC scene_description PRIVATE Boost::headers png_static)
+target_include_directories(app_support PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(app_support PRIVATE Boost::program_options png_static)
 add_custom_command(TARGET hiprt_runtime POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${freetype_SOURCE_DIR}/docs/FTL.TXT"
         "${CMAKE_CURRENT_BINARY_DIR}/bin/FREETYPE-LICENSE.txt"
@@ -267,9 +283,12 @@ add_custom_command(TARGET hiprt_runtime POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost_math/LICENSE_1_0.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/bin/BOOST-MATH-LICENSE.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${Boost_INCLUDE_DIR}/LICENSE_1_0.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/BOOST-PROGRAM-OPTIONS-LICENSE.txt"
     VERBATIM)
 if(MSVC)
-    set_property(TARGET rply ply_mesh scene_description text_geometry app_support png_static zlibstatic
+    set_property(TARGET rply ply_mesh scene_description text_geometry app_support png_static zlibstatic boost_program_options
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
@@ -283,13 +302,14 @@ function(add_hiprt_executable target source_path)
             -fgpu-rdc "${source}"
             -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
             "$<TARGET_FILE:app_support>"
+            "$<TARGET_FILE:boost_program_options>"
             "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
             "$<TARGET_FILE:scene_description>" ${HIPRT_LINK_OPTIONS}
             "$<TARGET_FILE:text_geometry>" "$<TARGET_FILE:freetype>"
             "$<TARGET_FILE:png_static>" "$<TARGET_FILE:zlibstatic>"
             -o "${output}"
         DEPENDS "${source}" ${HIP_DEMO_HEADERS}
-            ply_mesh rply scene_description text_geometry freetype app_support png_static zlibstatic
+            ply_mesh rply scene_description text_geometry freetype app_support png_static zlibstatic boost_program_options
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
