@@ -183,12 +183,14 @@ struct Hit {
     Material material;
     float roughness;
     bool front_face;
+    bool tiled_floor;
     unsigned int object_id;
 };
 
 __device__ void set_face_normal(Hit& hit, const Ray& ray, float3 outward_normal) {
     hit.front_face = dot(ray.direction, outward_normal) < 0.0f;
     hit.normal = hit.front_face ? outward_normal : -outward_normal;
+    hit.tiled_floor = false;
 }
 
 __device__ void set_object_material(Hit& hit, unsigned int object_id, bool detail = false) {
@@ -343,6 +345,104 @@ __device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maxi
     return found;
 }
 
+constexpr float floor_tile_size = 0.75f;
+constexpr float floor_grout_half_width = 0.009f;
+constexpr float floor_bevel_width = 0.022f;
+constexpr float floor_grout_depth = 0.012f;
+
+__device__ float tile_edge(float coordinate, float& slope) {
+    const float scaled = coordinate / floor_tile_size;
+    const float fraction = scaled - floorf(scaled);
+    const float distance = fminf(fraction, 1.0f - fraction) * floor_tile_size;
+    const float t = clamp01((distance - floor_grout_half_width) / floor_bevel_width);
+    slope = (fraction < 0.5f ? 1.0f : -1.0f) * 6.0f * t * (1.0f - t) / floor_bevel_width;
+    return t * t * (3.0f - 2.0f * t);
+}
+
+__device__ void apply_floor_tiles(Hit& hit, const Ray& ray) {
+    float slope_x = 0.0f, slope_z = 0.0f;
+    const float edge_x = tile_edge(hit.point.x, slope_x);
+    const float edge_z = tile_edge(hit.point.z, slope_z);
+    const float tile = edge_x * edge_z;
+    const int x = static_cast<int>(floorf(hit.point.x / floor_tile_size));
+    const int z = static_cast<int>(floorf(hit.point.z / floor_tile_size));
+    std::uint32_t hash = static_cast<std::uint32_t>(x) * 0x8da6b343u ^
+                         static_cast<std::uint32_t>(z) * 0xd8163841u;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    const float variation = 0.94f + 0.10f * static_cast<float>(hash & 255u) / 255.0f;
+    const float3 tile_color = variation * float3{0.73f, 0.72f, 0.69f};
+    const float3 grout_color{0.30f, 0.29f, 0.28f};
+    hit.albedo = grout_color * (1.0f - tile) + tile_color * tile;
+    const float3 outward = normalize({-floor_grout_depth * slope_x * edge_z, 1.0f,
+                                      -floor_grout_depth * slope_z * edge_x});
+    const float3 shading_normal = hit.front_face ? outward : -outward;
+    if (dot(ray.direction, shading_normal) < 0.0f) {
+        hit.normal = shading_normal;
+    }
+    hit.tiled_floor = true;
+}
+
+__device__ float wood_noise_value(int x, int y) {
+    std::uint32_t hash = static_cast<std::uint32_t>(x) * 0x8da6b343u ^
+                         static_cast<std::uint32_t>(y) * 0xd8163841u;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    return static_cast<float>(hash & 0xffffu) / 65535.0f;
+}
+
+__device__ float wood_noise(float x, float y) {
+    const int ix = static_cast<int>(floorf(x));
+    const int iy = static_cast<int>(floorf(y));
+    float fx = x - floorf(x);
+    float fy = y - floorf(y);
+    fx = fx * fx * (3.0f - 2.0f * fx);
+    fy = fy * fy * (3.0f - 2.0f * fy);
+    const float lower = wood_noise_value(ix, iy) * (1.0f - fx) + wood_noise_value(ix + 1, iy) * fx;
+    const float upper = wood_noise_value(ix, iy + 1) * (1.0f - fx) + wood_noise_value(ix + 1, iy + 1) * fx;
+    return lower * (1.0f - fy) + upper * fy;
+}
+
+__device__ float3 wood_albedo(float3 point) {
+    const float warp = wood_noise(point.x * 1.2f, point.y * 0.65f);
+    const float detail = wood_noise(point.x * 5.0f, point.y * 0.8f);
+    const float fine = wood_noise(point.x * 22.0f, point.y * 1.2f);
+    const float grain = 0.5f + 0.5f * sinf(point.x * 35.0f + 12.0f * warp + 3.0f * detail);
+    const float tone = clamp01(0.10f + 0.48f * grain + 0.27f * detail + 0.15f * fine);
+    return (1.0f - tone) * float3{0.25f, 0.10f, 0.035f} + tone * float3{0.66f, 0.36f, 0.14f};
+}
+
+__device__ float3 fractal_wall_albedo(float3 point, bool julia) {
+    const float horizontal = (julia ? point.z : -point.z) / (2.0f * room_half_depth) + 0.5f;
+    const float real = 3.5f * horizontal - (julia ? 1.75f : 2.25f);
+    const float imaginary = 0.7f * (point.y - room_height * 0.5f);
+    const float c_real = julia ? -0.8f : real;
+    const float c_imaginary = julia ? 0.156f : imaginary;
+    float x = julia ? real : 0.0f;
+    float y = julia ? imaginary : 0.0f;
+    float magnitude_squared = x * x + y * y;
+    constexpr int max_iterations = 48;
+    int iteration = 0;
+    while (iteration < max_iterations && magnitude_squared <= 4.0f) {
+        const float next_x = x * x - y * y + c_real;
+        y = 2.0f * x * y + c_imaginary;
+        x = next_x;
+        magnitude_squared = x * x + y * y;
+        ++iteration;
+    }
+    if (magnitude_squared <= 4.0f) {
+        return julia ? float3{0.015f, 0.06f, 0.025f} : float3{0.07f, 0.012f, 0.015f};
+    }
+    const float smooth_iteration = static_cast<float>(iteration) + 1.0f -
+        log2f(0.5f * log2f(magnitude_squared));
+    const float band = 0.5f + 0.5f * cosf(0.32f * smooth_iteration);
+    const float3 dark = julia ? float3{0.04f, 0.25f, 0.08f} : float3{0.30f, 0.035f, 0.025f};
+    const float3 light = julia ? float3{0.40f, 0.78f, 0.28f} : float3{0.88f, 0.30f, 0.12f};
+    return (1.0f - band) * dark + band * light;
+}
+
 __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool detail = false) {
     bool found = false;
     for (int wall = 0; wall < 5; ++wall) {
@@ -383,6 +483,13 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool 
         set_face_normal(hit, ray, normal);
         hit.albedo = wall == 3 ? float3{0.72f, 0.10f, 0.10f} :
             wall == 4 ? float3{0.10f, 0.65f, 0.16f} : float3{0.75f, 0.75f, 0.75f};
+        if (detail && wall == 0) {
+            apply_floor_tiles(hit, ray);
+        } else if (detail && wall == 2) {
+            hit.albedo = wood_albedo(point);
+        } else if (detail && wall >= 3) {
+            hit.albedo = fractal_wall_albedo(point, wall == 4);
+        }
         hit.material = !detail && wall == 1 && fabsf(point.x) <= light_half_width &&
             fabsf(point.z - light_center_z) <= light_half_depth ? Material::emissive : Material::diffuse;
         hit.roughness = 1.0f;
@@ -453,6 +560,8 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
         if (!hit_scene(ray, hit, scene)) {
             break;
         }
+        const float3 geometric_normal = hit.tiled_floor
+            ? float3{0.0f, hit.front_face ? 1.0f : -1.0f, 0.0f} : hit.normal;
 
         if (bounce == 0 && specular_primary &&
             (hit.material == Material::glass || hit.material == Material::metal || hit.material == Material::phong)) {
@@ -497,7 +606,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
                           light_center_z + (2.0f * random.next() - 1.0f) * light_half_depth},
                          {0.0f, -1.0f, 0.0f}, 4.0f * light_half_width * light_half_depth};
             }
-            const float3 shadow_origin = hit.point + hit.normal * 0.002f;
+            const float3 shadow_origin = hit.point + geometric_normal * 0.002f;
             const float3 to_light = light.point - shadow_origin;
             const float distance_squared = dot(to_light, to_light);
             const float distance = sqrtf(distance_squared);
@@ -509,6 +618,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
             const float shadow_tolerance = scene.detail
                 ? fminf(0.02f, 0.0025f / fmaxf(light_cosine, 0.1f)) : 0.001f;
             if (cosine > 0.0f && light_cosine > 0.0f &&
+                (!hit.tiled_floor || dot(geometric_normal, light_direction) > 0.0f) &&
                 (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
                  shadow_hit.distance >= distance - shadow_tolerance)) {
                 float3 scattering = hit.albedo * (cosine / pi);
@@ -537,9 +647,12 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
                 ray.direction = normalize(hit.normal + random_unit_vector(random));
                 throughput = throughput * hit.albedo;
             }
+            if (hit.tiled_floor && dot(ray.direction, geometric_normal) <= 0.0f) {
+                break;
+            }
         }
 
-        ray.origin = hit.point + hit.normal * (dot(ray.direction, hit.normal) > 0.0f ? 0.002f : -0.002f);
+        ray.origin = hit.point + geometric_normal * (dot(ray.direction, geometric_normal) > 0.0f ? 0.002f : -0.002f);
     }
     return radiance;
 }

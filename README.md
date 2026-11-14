@@ -120,7 +120,12 @@ Z-up Artec dragon downloaded separately:
 The scene fits the mesh in the center of the Cornell box and places a mirror
 sphere and a glass sphere alongside it. The suspended emissive torus is the
 light source, including for direct lighting, reflections and refractions.
-The mesh uses a glossy Phong material. Its fitting dimensions differ from
+The floor has procedural tiles with pronounced recessed-looking grout, using bump
+mapping rather than displaced geometry. The back wall has procedural wood grain;
+the red left wall displays the Mandelbrot set and the green right wall a Julia set.
+These textures are procedural and need no image files. The mesh uses a cool blue,
+glossy Phong material to stand out against the wood.
+Its fitting dimensions differ from
 the classic scene, and large meshes need additional GPU memory and render time.
 The original scene remains the default and is also selectable with
 `--scene classic`.
@@ -130,7 +135,7 @@ The original scene remains the default and is also selectable with
 The separate GPU test executable checks adaptive sampling, mesh and custom-primitive intersections,
 room lighting, Phong sampling, reflection, glass refraction, and cat visibility
 without rendering an image. CTest additionally checks PLY parsing, imported
-mesh intersections and the detail scene's materials and torus lighting:
+mesh intersections and the detail scene's materials, procedural walls and floor, and torus lighting:
 
 ```powershell
 .\build\bin\hiprt_tests.exe

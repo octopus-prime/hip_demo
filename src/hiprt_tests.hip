@@ -595,6 +595,66 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
     if (!reflected_light) {
         failed |= 32;
     }
+    Hit detail_mesh{};
+    if (!hit_objects({{0.0f, 0.5f, 1.0f}, {0.0f, 0.0f, -1.0f}}, detail_mesh, scene) ||
+        detail_mesh.object_id != scene_object_count + 1 || detail_mesh.material != Material::phong ||
+        !(detail_mesh.albedo.z > detail_mesh.albedo.y && detail_mesh.albedo.y > detail_mesh.albedo.x)) {
+        failed |= 512;
+    }
+    Hit tile{}, grout{}, positive_edge{}, negative_edge{}, corner{}, classic{}, underside{}, grazing{};
+    const auto floor_ray = [](float x, float z) {
+        return Ray{{x, 1.0f, z}, {0.0f, -1.0f, 0.0f}};
+    };
+    if (!hit_room(floor_ray(0.375f, 0.375f), 10.0f, tile, true) ||
+        !hit_room(floor_ray(0.0f, 0.375f), 10.0f, grout, true) ||
+        !hit_room(floor_ray(0.020f, 0.375f), 10.0f, positive_edge, true) ||
+        !hit_room(floor_ray(-0.020f, 0.375f), 10.0f, negative_edge, true) ||
+        !hit_room(floor_ray(0.020f, 0.020f), 10.0f, corner, true) ||
+        !hit_room(floor_ray(0.0f, 0.375f), 10.0f, classic) ||
+        !hit_room({{0.020f, -1.0f, 0.375f}, {0.0f, 1.0f, 0.0f}}, 10.0f, underside, true) ||
+        !hit_room({{1.020f, 0.010f, 0.375f}, normalize({-1.0f, -0.010f, 0.0f})}, 10.0f, grazing, true) ||
+        !tile.tiled_floor || !grout.tiled_floor || classic.tiled_floor ||
+        tile.albedo.x <= grout.albedo.x || classic.albedo.x != 0.75f ||
+        fabsf(tile.normal.x) > 0.0001f || fabsf(tile.normal.z) > 0.0001f ||
+        positive_edge.normal.x >= -0.55f || negative_edge.normal.x <= 0.55f ||
+        corner.normal.x >= -0.30f || corner.normal.z >= -0.30f ||
+        !positive_edge.front_face || underside.front_face || underside.normal.y >= 0.0f ||
+        fabsf(grazing.normal.x) > 0.0001f || grazing.normal.y < 0.999f ||
+        fabsf(positive_edge.distance - 1.0f) > 0.0001f) {
+        failed |= 64;
+    }
+    Hit wood{}, wood_repeat{}, wood_other{}, classic_back{};
+    const Ray back_ray{{0.0f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}};
+    if (!hit_room(back_ray, 10.0f, wood, true) ||
+        !hit_room({{0.0f, 2.0f, 1.0f}, {0.0f, 0.0f, -1.0f}}, 10.0f, wood_repeat, true) ||
+        !hit_room({{0.1f, 2.0f, 0.0f}, {0.0f, 0.0f, -1.0f}}, 10.0f, wood_other, true) ||
+        !hit_room(back_ray, 10.0f, classic_back) ||
+        wood.material != Material::diffuse || wood.tiled_floor || wood.normal.z != 1.0f ||
+        wood.albedo.x != wood_repeat.albedo.x || fabsf(wood.albedo.x - wood_other.albedo.x) < 0.01f ||
+        !(wood.albedo.x > wood.albedo.y && wood.albedo.y > wood.albedo.z) ||
+        classic_back.albedo.x != 0.75f || classic_back.albedo.y != 0.75f) {
+        failed |= 128;
+    }
+    Hit mandelbrot_inside{}, mandelbrot_outside{}, julia_inside{}, julia_outside{}, classic_left{}, classic_right{};
+    const auto side_ray = [](float direction, float z) {
+        return Ray{{0.0f, 2.0f, z}, {direction, 0.0f, 0.0f}};
+    };
+    if (!hit_room(side_ray(-1.0f, 0.0f), 10.0f, mandelbrot_inside, true) ||
+        !hit_room(side_ray(-1.0f, -2.4f), 10.0f, mandelbrot_outside, true) ||
+        !hit_room(side_ray(1.0f, 0.0f), 10.0f, julia_inside, true) ||
+        !hit_room(side_ray(1.0f, 2.4f), 10.0f, julia_outside, true) ||
+        !hit_room(side_ray(-1.0f, 0.0f), 10.0f, classic_left) ||
+        !hit_room(side_ray(1.0f, 0.0f), 10.0f, classic_right) ||
+        mandelbrot_inside.material != Material::diffuse || julia_inside.material != Material::diffuse ||
+        mandelbrot_inside.normal.x != 1.0f || julia_inside.normal.x != -1.0f ||
+        mandelbrot_outside.albedo.x <= mandelbrot_inside.albedo.x ||
+        julia_outside.albedo.y <= julia_inside.albedo.y ||
+        mandelbrot_outside.albedo.x <= mandelbrot_outside.albedo.y ||
+        julia_outside.albedo.y <= julia_outside.albedo.x ||
+        classic_left.albedo.x != 0.72f || classic_left.albedo.y != 0.10f ||
+        classic_right.albedo.x != 0.10f || classic_right.albedo.y != 0.65f) {
+        failed |= 256;
+    }
     *failure = failed;
 }
 

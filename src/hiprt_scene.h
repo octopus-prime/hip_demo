@@ -95,7 +95,7 @@ __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) 
         set_face_normal(closest_hit, ray, normalize(result.normal));
         if (scene.detail) {
             closest_hit.object_id = scene_object_count + 1;
-            closest_hit.albedo = {0.72f, 0.39f, 0.13f};
+            closest_hit.albedo = {0.18f, 0.38f, 0.68f};
             closest_hit.material = Material::phong;
             closest_hit.roughness = 0.0f;
         } else if (result.primID < mesh_triangles.size()) {
