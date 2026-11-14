@@ -13,7 +13,7 @@ __device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, c
     if (result.primID >= data->count && result.primID - data->count < data->csg_count) {
         hip_demo::Hit hit{};
         if (!hip_demo::intersect_csg(scene_ray, data->csgs[result.primID - data->count], data->csg_leaves,
-                                     ray.minT, ray.maxT, hit)) return false;
+                                     ray.minT, ray.maxT, hit, {data->glyphs, data->curves})) return false;
         result.t = hit.distance;
         result.normal = hit.front_face ? hit.normal : -hit.normal;
         return true;

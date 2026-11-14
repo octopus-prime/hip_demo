@@ -92,7 +92,7 @@ struct Text {
 using Light = std::variant<RectangleLight, TorusLight>;
 struct CsgNode {
     Position where;
-    std::variant<Sphere, Torus> shape;
+    std::variant<Sphere, Torus, Text> shape;
     CsgOperation operation = CsgOperation::unite;
     std::vector<CsgNode> children;
 };

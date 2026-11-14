@@ -1,0 +1,26 @@
+hipscene 1
+camera { position [0, 3, 12] target [0, 1, 0] half_view_height 0.4 }
+room {
+    size [8, 6, 10]
+    floor color [0.7, 0.7, 0.7]
+    ceiling color [0.7, 0.7, 0.7]
+    back color [0.7, 0.7, 0.7]
+    left color [0.7, 0.1, 0.1]
+    right color [0.1, 0.7, 0.1]
+}
+material blue = phong [0.1, 0.2, 0.9]
+light ceiling_rectangle { center [0, 0] size [3, 2] radiance [10, 10, 10] }
+csg {
+    material blue
+    difference {
+        sphere { center [0, 1, 0] radius 1 }
+        text { font "fonts/example.ttf" value "BO" size 1 depth 0.5 position [-0.5, 0.5, 0.5] }
+    }
+}
+csg {
+    material blue
+    difference {
+        text { font "fonts/example.ttf" value "BO" size 1 depth 0.5 position [-0.5, 0.5, 0.5] }
+        text { font "fonts/example.ttf" value "BO" size 1 depth 0.5 position [-0.5, 0.5, 0.5] }
+    }
+}

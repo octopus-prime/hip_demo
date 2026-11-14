@@ -21,6 +21,7 @@ struct PreparedScene {
     unsigned int cat_detail_start = 0;
     std::vector<SceneCsg> csgs;
     std::vector<SceneCsgLeaf> csg_leaves;
+    unsigned int glyph_count = 0;
 };
 
 }

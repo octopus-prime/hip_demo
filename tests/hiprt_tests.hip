@@ -5,6 +5,7 @@
 #include "reference_scene.h"
 #include "analytic_intersection_tests.h"
 #include "csg_tests.h"
+#include "csg_text_tests.h"
 
 using namespace hip_demo;
 
@@ -842,17 +843,17 @@ __global__ void check_text_probes(TraceScene scene, const TextProbe* probes, uns
     failures[index] = failed;
 }
 
-__global__ void check_mixed_text(TraceScene scene, TextProbe probe, unsigned int* failure) {
+__global__ void check_mixed_text(TraceScene scene, TextProbe probe, TextProbe csg_probe, unsigned int* failure) {
     unsigned int failed = 0;
     Hit hit{};
-    if (!hit_objects(probe.ray, hit, scene) || hit.object_id != probe.object_id + 2 ||
+    if (!hit_objects(probe.ray, hit, scene) || hit.object_id != probe.object_id + 3 ||
         hit.material != probe.material.kind || fabsf(hit.distance - probe.hit.distance) > 0.0001f) failed |= 1;
     if (!hit_objects({{-20, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 0 ||
         fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 2;
     const float3 a = mesh_points[0], b = mesh_points[2], c = mesh_points[1];
     const float3 normal = normalize(cross(b - a, c - a));
     const float3 center = (a + b + c) / 3;
-    if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 4 ||
+    if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 5 ||
         hit.material != Material::phong || fabsf(hit.distance - 0.25f) > 0.0001f) failed |= 4;
     const TextCurve cubic[2]{{{0, 0, 0, 2}, {0, 3, -3, 0}}, {{2, -2, 0, 0}, {0, 0, 0, 0}}};
     TextGlyph glyph;
@@ -864,6 +865,8 @@ __global__ void check_mixed_text(TraceScene scene, TextProbe probe, unsigned int
         fabsf(curved_hit.distance - 1.25f) > 0.0001f) failed |= 8;
     if (!hit_objects({{-22, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 1 ||
         hit.material != Material::phong || fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 16;
+    if (!hit_objects(csg_probe.ray, hit, scene) || hit.object_id != 2 ||
+        hit.material != Material::phong || fabsf(hit.distance - csg_probe.hit.distance) > 0.0001f) failed |= 32;
     *failure = failed;
 }
 
@@ -926,15 +929,51 @@ void check_text_scene(int device, const char* font) {
     check_hip(hipMemcpy(device_probes.get(), probes.data(), probes.size() * sizeof(TextProbe), hipMemcpyHostToDevice),
               "Uploading text probes");
     const auto count = static_cast<unsigned int>(probes.size());
-    hipLaunchKernelGGL(check_text_probes, dim3((count + 63) / 64), dim3(64), 0, 0,
-                       scene.scene(), device_probes.get(), count, failures.get());
-    check_hip(hipGetLastError(), "Launching text intersection checks");
-    std::vector<unsigned int> results(count);
-    check_hip(hipMemcpy(results.data(), failures.get(), results.size() * sizeof(unsigned int), hipMemcpyDeviceToHost),
-              "Reading text intersection checks");
-    for (unsigned int index = 0; index < count; ++index) {
-        if (results[index]) throw std::runtime_error("Text HIP RT probe " + std::to_string(index) +
-                                                    " failed (flags " + std::to_string(results[index]) + ")");
+    const auto check_probes = [&](TraceScene view, const char* label) {
+        hipLaunchKernelGGL(check_text_probes, dim3((count + 63) / 64), dim3(64), 0, 0,
+                           view, device_probes.get(), count, failures.get());
+        check_hip(hipGetLastError(), "Launching text intersection checks");
+        std::vector<unsigned int> results(count);
+        check_hip(hipMemcpy(results.data(), failures.get(), results.size() * sizeof(unsigned int), hipMemcpyDeviceToHost),
+                  "Reading text intersection checks");
+        for (unsigned int index = 0; index < count; ++index) {
+            if (results[index]) throw std::runtime_error(std::string(label) + " HIP RT probe " + std::to_string(index) +
+                                                        " failed (flags " + std::to_string(results[index]) + ")");
+        }
+    };
+    check_probes(scene.scene(), "Text");
+    {
+        auto csg_description = description;
+        csg_description.csg_texts = csg_description.texts;
+        csg_description.texts.clear();
+        for (unsigned int i = 0; i < csg_description.csg_texts.size(); ++i) {
+            SceneCsgLeaf leaf;
+            leaf.text = true;
+            leaf.text_index = i;
+            csg_description.csg_leaves.push_back(leaf);
+            csg_description.csgs.push_back({i, 1, i, csg_description.csg_texts[i].material});
+        }
+        const auto prepared = prepare_scene(csg_description);
+        if (prepared.glyph_count != 0 || !prepared.vertices.empty() || prepared.bounds.size() != 4)
+            throw std::runtime_error("CSG operand glyphs must not become standalone objects or triangles");
+        const HiprtScene csg_scene(device, prepared);
+        check_probes(csg_scene.scene(), "CSG text");
+        csg_description.csg_texts[0].value = " ";
+        csg_description.csg_texts.resize(1);
+        csg_description.csgs.resize(1);
+        csg_description.csg_leaves.resize(1);
+        const HiprtScene empty(device, csg_description);
+        TextProbe empty_probe;
+        empty_probe.ray = {{0, 0, 2}, {0, 0, -1}};
+        check_hip(hipMemcpy(device_probes.get(), &empty_probe, sizeof(empty_probe), hipMemcpyHostToDevice),
+                  "Uploading empty CSG text probe");
+        hipLaunchKernelGGL(check_text_probes, dim3(1), dim3(1), 0, 0,
+                           empty.scene(), device_probes.get(), 1, failures.get());
+        check_hip(hipGetLastError(), "Launching empty CSG text check");
+        unsigned int result = 0;
+        check_hip(hipMemcpy(&result, failures.get(), sizeof(result), hipMemcpyDeviceToHost),
+                  "Reading empty CSG text check");
+        if (result != 0) throw std::runtime_error("Whitespace CSG text must remain empty");
     }
     ScenePrimitive sphere;
     sphere.center = {-20, 1, -20};
@@ -943,12 +982,22 @@ void check_text_scene(int device, const char* font) {
     sphere.center.x = -22;
     description.csg_leaves.push_back({sphere, csg_inside, csg_outside});
     description.csgs.push_back({0, 1, 0, {{0.2f, 0.4f, 0.8f}, Material::phong, 0}});
+    auto csg_text = description.texts[0];
+    csg_text.position = {-30, 0, -20};
+    description.csg_texts.push_back(csg_text);
+    SceneCsgLeaf text_leaf;
+    text_leaf.text = true;
+    description.csg_leaves.push_back(text_leaf);
+    description.csgs.push_back({1, 1, 1, {{0.2f, 0.4f, 0.8f}, Material::phong, 0}});
     SceneMesh crystal;
     crystal.kind = SceneMeshKind::crystal;
     description.meshes.push_back(crystal);
     const HiprtScene mixed(device, description);
     const auto sample = std::find_if(probes.begin(), probes.end(), [](const TextProbe& p) { return p.expected; });
-    hipLaunchKernelGGL(check_mixed_text, dim3(1), dim3(1), 0, 0, mixed.scene(), *sample, failures.get());
+    auto csg_probe = *sample;
+    csg_probe.ray.origin.x -= 40;
+    csg_probe.ray.origin.z -= 20;
+    hipLaunchKernelGGL(check_mixed_text, dim3(1), dim3(1), 0, 0, mixed.scene(), *sample, csg_probe, failures.get());
     check_hip(hipGetLastError(), "Launching mixed text checks");
     unsigned int mixed_failure = 0;
     check_hip(hipMemcpy(&mixed_failure, failures.get(), sizeof(mixed_failure), hipMemcpyDeviceToHost),
@@ -958,6 +1007,7 @@ void check_text_scene(int device, const char* font) {
     description.meshes.clear();
     description.csgs.clear();
     description.csg_leaves.clear();
+    description.csg_texts.clear();
     description.texts[0].value = "   ";
     description.texts.resize(1);
     const HiprtScene spaces(device, description);
@@ -989,7 +1039,10 @@ int main(int argc, char** argv) {
                   << device.properties.gcnArchName << ")...\n";
         // Establish the HIP context before HIP RT queries it.
         const auto context_buffer = allocate_device<unsigned int>(1, "Initializing HIP context");
-        if (!text_mode) run_analytic_intersection_tests();
+        if (!text_mode) {
+            run_analytic_intersection_tests();
+            run_csg_text_tests(device.id);
+        }
         if (text_mode) {
             check_text_scene(device.id, argv[2]);
             return 0;

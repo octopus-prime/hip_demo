@@ -79,7 +79,7 @@ struct Text {
 using Light = std::variant<RectangleLight, TorusLight>;
 struct CsgNode {
     Position where;
-    std::variant<Sphere, Torus> shape;
+    std::variant<Sphere, Torus, Text> shape;
     CsgOperation operation = CsgOperation::unite;
     std::vector<CsgNode> children;
 };
@@ -165,8 +165,9 @@ bp::rule<struct sphere_p_, Sphere> sphere_p = "sphere";
 bp::rule<struct torus_p_, Torus> torus_p = "torus";
 bp::rule<struct csg_sphere_p_, Sphere> csg_sphere_p = "CSG sphere";
 bp::rule<struct csg_torus_p_, Torus> csg_torus_p = "CSG torus";
+bp::rule<struct csg_text_p_, Text> csg_text_p = "CSG text";
 bp::rule<struct csg_branch_p_, CsgBranch> csg_branch_p = "binary CSG operation";
-bp::rule<struct csg_node_p_, CsgNode> csg_node_p = "CSG sphere, torus or operation";
+bp::rule<struct csg_node_p_, CsgNode> csg_node_p = "CSG sphere, torus, text or operation";
 bp::rule<struct csg_p_, Csg> csg_p = "CSG object";
 bp::rule<struct mesh_up_p_, MeshUp> mesh_up_p = "mesh up (y or z)";
 bp::rule<struct mesh_p_, Mesh> mesh_p = "mesh";
@@ -223,6 +224,10 @@ auto csg_sphere_p_def = position_p >> bp::lit("sphere") > '{'
 auto csg_torus_p_def = position_p >> bp::lit("torus") > '{'
     > bp::lit("center") > vector_p > keyword("major_radius") > scalar_p
     > keyword("minor_radius") > scalar_p > keyword("tilt_x") > scalar_p > bp::attr(std::string{}) > '}';
+auto csg_text_p_def = position_p >> bp::lit("text") > '{'
+    > bp::lit("font") > string_p > bp::lit("value") > string_p
+    > keyword("size") > scalar_p > keyword("depth") > scalar_p
+    > bp::lit("position") > vector_p > bp::attr(std::string{}) > '}';
 auto csg_branch_p_def = position_p >> (
     (bp::lit("union") >> bp::attr(CsgOperation::unite)) |
     (bp::lit("intersection") >> bp::attr(CsgOperation::intersection)) |
@@ -234,6 +239,10 @@ auto csg_node_p_def =
         bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
     })] |
     csg_torus_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_text_p[([](auto& context) {
         const auto& shape = bp::_attr(context);
         bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
     })] |
@@ -261,7 +270,7 @@ BOOST_PARSER_DEFINE_RULES(
     position_p, identifier_p, string_p, scalar_p, vector2_p, vector_p,
     camera_p, surface_p, wood_p, marble_p, floor_p, ceiling_p, back_p, left_p, right_p, room_p,
     diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
-    csg_sphere_p, csg_torus_p, csg_branch_p, csg_node_p, csg_p,
+    csg_sphere_p, csg_torus_p, csg_text_p, csg_branch_p, csg_node_p, csg_p,
     mesh_up_p, mesh_p, text_p, builtin_p, object_p, scene_p);
 
 }
@@ -280,13 +289,17 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
         result.where = offset(node.where);
         result.operation = node.operation;
         if (node.children.empty()) {
-            result.shape = std::visit([&](const auto& shape) -> std::variant<scene_ast::Sphere, scene_ast::Torus> {
+            result.shape = std::visit([&](const auto& shape)
+                -> std::variant<scene_ast::Sphere, scene_ast::Torus, scene_ast::Text> {
                 using T = std::decay_t<decltype(shape)>;
                 if constexpr (std::is_same_v<T, Sphere>)
                     return scene_ast::Sphere{offset(shape.where), shape.center, shape.radius, {}};
-                else
+                else if constexpr (std::is_same_v<T, Torus>)
                     return scene_ast::Torus{offset(shape.where), shape.center, shape.major_radius,
                         shape.minor_radius, shape.tilt_x, {}};
+                else
+                    return scene_ast::Text{offset(shape.where), shape.font, shape.value,
+                        shape.size, shape.depth, shape.position, {}};
             }, node.shape);
         }
         for (const auto& child : node.children) result.children.push_back(self(self, child));

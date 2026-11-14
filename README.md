@@ -156,6 +156,7 @@ not a guarantee of matching fixed-sample quality.
 | [Detail](scenes/detail.hipscene) | `--scene detail` | PLY mesh and a font. |
 | [Text](scenes/text.hipscene) | `--scene .\scenes\text.hipscene` | A font. |
 | [CSG](scenes/csg.hipscene) | `--scene .\scenes\csg.hipscene` | None. |
+| [CSG text](scenes/csg_text.hipscene) | `--scene .\scenes\csg_text.hipscene` | A font. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
 crystal and a low-poly cat. Detail contains a luminous torus, mirror and glass
@@ -165,6 +166,9 @@ with holes, reflections and shadows. CSG shows a gold union of spheres (left),
 a blue intersection/lens (center), a copper sphere with a spherical cutout
 (right), and a green nested torus/sphere construction (back). Text and CSG
 are selected by file path, not preset aliases.
+CSG text demonstrates raised lettering joined to a sphere (left), lettering
+clipped by a sphere (center), and engraved lettering subtracted from a sphere
+(right).
 
 From `build\bin`, render the CSG demo to PNG:
 
@@ -176,6 +180,7 @@ Detail refers to a separately downloaded dragon mesh. Edit its scene `mesh.file`
 to use your own asset. Detail and text refer to Windows Arial; on other systems,
 change their `font` paths to a local scalable TrueType or OpenType font. Fonts
 and external models are not bundled; check their licenses before use.
+The CSG text demo also uses Windows Arial.
 
 ### Importing a PLY mesh
 
@@ -220,7 +225,7 @@ bidirectional layout are not supported.
 
 ### CSG: union, intersection and difference
 
-A `csg` object combines closed spheres and tori without triangulation:
+A `csg` object combines closed spheres, tori and extruded text without triangulation:
 
 ```text
 csg {
@@ -243,16 +248,49 @@ Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
 
 Set the material once on the `csg` object, not on its leaves. It also covers
 new cut surfaces, whose normals point out of the remaining solid.
-Meshes, text, room surfaces and lights cannot be CSG operands.
+Meshes, room surfaces and lights cannot be CSG operands.
+
+Text operands use the same font, value, size, depth and position fields as
+standalone text, but **omit the leaf material**:
+
+```text
+csg {
+    material copper
+    difference {
+        sphere { center [0, 1.2, 0] radius 1.2 }
+        text {
+            font "C:\\Windows\\Fonts\\arial.ttf"
+            value "CSG"
+            size 1
+            depth 1
+            position [-1.05, 0.85, 0.55]
+        }
+    }
+}
+```
+
+All glyphs form one solid operand: their volumes are united, overlapping
+glyphs do not cancel, and letter counters remain open. Whitespace-only operands
+are empty. Text still lies in XY and extrudes toward +Z, with the font path
+relative to the scene file. Operand glyphs are not rendered separately.
+
+From `build\bin`, start with a small preview:
+
+```powershell
+.\hiprt_demo.exe --scene ..\..\scenes\csg_text.hipscene --output csg-text.png --width 960 --height 540 --samples 128
+```
 
 HIP RT traverses conservative bounding boxes; custom GPU intersections combine
-analytic, single-precision sphere/torus boundaries. There is no sphere tracing.
+analytic, single-precision sphere/torus and text cap/Bezier boundaries. There is no sphere tracing.
 Tangencies and zero-volume contacts do not create solid intervals; identical
 subtractions are empty. Nearly coincident boundaries are grouped within
 `2 * float_epsilon * max(1, abs(ray_t))`, so sub-tolerance thin features can
 disappear. At edges where multiple surfaces meet, the selected normal is
 deterministic but not unique. Deep/large constructions cost more than simple
 primitives; bounding boxes are not tightened for individual Boolean operations.
+Text CSG streams boundaries rather than imposing a four-hit limit. It also
+evaluates contour winding to determine solid membership, so long strings and
+many overlapping operands can cost substantially more than standalone text.
 
 ### Migration from the previous CLI and scene format
 

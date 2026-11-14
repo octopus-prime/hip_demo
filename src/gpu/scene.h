@@ -49,7 +49,7 @@ public:
         csg_count_ = static_cast<unsigned int>(prepared.csgs.size());
         const auto& text = prepared.text;
         const auto& bounds = prepared.bounds;
-        const auto custom_count = object_count + csg_count_ + static_cast<unsigned int>(text.glyphs.size());
+        const auto custom_count = object_count + csg_count_ + prepared.glyph_count;
         if (csg_count_ != 0) {
             csgs_ = allocate_device<SceneCsg>(prepared.csgs.size(), "Allocating CSG objects");
             csg_leaves_ = allocate_device<SceneCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG leaves");
@@ -108,7 +108,7 @@ public:
             hiprtFuncDataSet function_data{};
             primitive_data_ = allocate_device<PrimitiveData>(1, "Allocating primitive dispatch data");
             const PrimitiveData data{primitives_.get(), object_count, text_glyphs_.get(), text_curves_.get(),
-                                     static_cast<unsigned int>(text.glyphs.size()),
+                                     prepared.glyph_count,
                                      csgs_.get(), csg_leaves_.get(), csg_count_};
             check_hip(hipMemcpy(primitive_data_.get(), &data, sizeof(data), hipMemcpyHostToDevice),
                       "Uploading primitive dispatch data");

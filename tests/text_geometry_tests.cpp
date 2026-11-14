@@ -1,4 +1,5 @@
 #include "surface/text.h"
+#include "surface/text_solid.h"
 #include "polynomial_cases.h"
 
 #include <algorithm>
@@ -71,6 +72,49 @@ void check_roots() {
     require(text_detail::curve_roots(nearly_quadratic, roots) == 2 &&
             std::abs(roots[0] - 0.25f) < 2e-6f && std::abs(roots[1] - 0.75f) < 2e-6f,
             "nearly quadratic cubic must retain both small roots");
+}
+
+void check_solid_membership() {
+    std::vector<TextCurve> curves;
+    line(curves, 0, 0, 3, 0); line(curves, 3, 0, 3, 3);
+    line(curves, 3, 3, 0, 3); line(curves, 0, 3, 0, 0);
+    line(curves, 1, 1, 1, 2); line(curves, 1, 2, 2, 2);
+    line(curves, 2, 2, 2, 1); line(curves, 2, 1, 1, 1);
+    TextGlyph glyph;
+    glyph.depth = 0.5f;
+    glyph.curve_count = static_cast<std::uint32_t>(curves.size());
+    for (bool even_odd : {false, true}) {
+        glyph.even_odd = even_odd;
+        for (int crossing = 1; crossing <= 4; ++crossing) {
+            const bool before = crossing % 2 == 0;
+            require(text_solid_contains(glyph, curves.data(), {-1, 1.5f, 0.25f}, {1, 0, 0},
+                                        static_cast<float>(crossing), false) == before &&
+                    text_solid_contains(glyph, curves.data(), {-1, 1.5f, 0.25f}, {1, 0, 0},
+                                        static_cast<float>(crossing), true) != before,
+                    "one-sided side/counter membership");
+        }
+        require(text_solid_contains(glyph, curves.data(), {0.5f, 0.5f, 2}, {0, 0, -2}, 0.75f, true) &&
+                !text_solid_contains(glyph, curves.data(), {0.5f, 0.5f, 2}, {0, 0, -2}, 0.75f, false),
+                "non-unit cap entry membership");
+        require(!text_solid_contains(glyph, curves.data(), {1.5f, 1.5f, 2}, {0, 0, -1}, 1.75f, true),
+                "cap counter remains empty");
+        for (float y : {0.0f, 3.0f}) {
+            require(!text_solid_contains(glyph, curves.data(), {-1, y, 0.25f}, {1, 0, 0}, 2, true) &&
+                    !text_solid_contains(glyph, curves.data(), {0.5f, y, 2}, {0, 0, -1}, 1.75f, true),
+                    "rays along a side are not solid intervals");
+        }
+        require(!text_solid_contains(glyph, curves.data(), {-1, 0.5f, 0}, {1, 0, 0}, 2, true),
+                "ray in a cap plane is not a solid interval");
+        require(text_solid_contains(glyph, curves.data(), {-1, -1, 0.25f}, {1, 1, 0}, 1, true) &&
+                !text_solid_contains(glyph, curves.data(), {-1, -1, 0.25f}, {1, 1, 0}, 1, false),
+                "shared-vertex crossings count once");
+    }
+    const TextCurve arch[2]{{{0, 2, 0, 0}, {0, 4, -4, 0}},
+                            {{2, -2, 0, 0}, {0, 0, 0, 0}}};
+    glyph.curve_count = 2;
+    require(!text_solid_contains(glyph, arch, {-1, 1, 0.25f}, {1, 0, 0}, 3, true) &&
+            text_solid_contains(glyph, arch, {-1, 0.5f, 0.25f}, {1, 0, 0}, 2, true),
+            "quadratic tangent cancellation versus a real interval");
 }
 
 void check_fill_crossings() {
@@ -149,6 +193,7 @@ int main(int argc, char** argv) {
         check_roots();
         check_intersections();
         check_fill_crossings();
+        check_solid_membership();
         if (argc == 2) check_font(argv[1]);
         std::cout << "Text geometry tests passed.\n";
         return 0;

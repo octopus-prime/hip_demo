@@ -78,6 +78,12 @@ struct SceneValues {
         return result;
     }
 
+    SceneText text(const scene_ast::Text& source) const {
+        return {string(source.font, source.where), string(source.value, source.where),
+                positive(source.size, source.where), positive(source.depth, source.where),
+                vector(source.position, source.where), {}};
+    }
+
     ScenePrimitive primitive(const scene_ast::Torus& source) const {
         ScenePrimitive result;
         result.center = vector(source.center, source.where);

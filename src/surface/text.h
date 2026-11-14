@@ -30,6 +30,11 @@ struct TextGeometry {
     std::vector<TextGlyph> glyphs;
 };
 
+struct TextGeometryView {
+    const TextGlyph* glyphs = nullptr;
+    const TextCurve* curves = nullptr;
+};
+
 void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::uint32_t object_id);
 
 namespace text_detail {

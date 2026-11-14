@@ -58,6 +58,8 @@ inline constexpr std::uint32_t csg_outside = csg_inside - 1;
 struct SceneCsgLeaf {
     ScenePrimitive shape;
     std::uint32_t when_inside = csg_inside, when_outside = csg_outside;
+    std::uint32_t text_index = 0, first_glyph = 0, glyph_count = 0;
+    bool text = false;
 };
 
 struct SceneCsg {
@@ -88,4 +90,5 @@ struct SceneDescription {
     std::vector<SceneText> texts;
     std::vector<SceneCsg> csgs;
     std::vector<SceneCsgLeaf> csg_leaves;
+    std::vector<SceneText> csg_texts;
 };

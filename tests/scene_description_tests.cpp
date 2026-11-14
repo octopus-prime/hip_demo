@@ -158,6 +158,21 @@ csg {
                 demo.meshes.empty() && demo.texts.empty(), "CSG demo is self-contained");
         const auto text_fixture = std::filesystem::absolute(argv[1]).parent_path() / "text.hipscene";
         const auto loaded_text = load_scene_description(text_fixture.string());
+        const auto csg_text_fixture = text_fixture.parent_path() / "csg_text.hipscene";
+        const auto csg_text = load_scene_description(csg_text_fixture.string());
+        require(csg_text.csgs.size() == 2 && csg_text.csg_texts.size() == 1 &&
+                csg_text.texts.empty() && csg_text.csg_texts[0].value == "BO" &&
+                csg_text.csg_texts[0].font == loaded_text.texts[0].font,
+                "CSG text paths resolve and repeated identical operands share geometry");
+        const auto text_operand = replace(text_object, " material blue", "");
+        const std::string text_solid = "\ncsg { material blue " + text_operand + " }\n";
+        const auto text_ast = detached_ast(text + text_solid, "text-solid.hipscene");
+        require(build_scene_description(text_ast).csg_texts.size() == 1,
+                "CSG text AST owns its strings after copy and move");
+        rejects_build(text + replace(text_solid, "depth 0.2", "depth 0"), "positive");
+        rejects_build(text + replace(text_solid, "font.ttf", ""), "must not be empty");
+        rejects(text + replace(text_solid, "position [-1, 0.2, 0]", "position [-1, 0.2, 0] material blue"),
+                "expected '}'");
         require(loaded_text.texts[0].font ==
                     (text_fixture.parent_path() / "fonts" / "example.ttf").lexically_normal().string(),
                 "font paths resolve relative to scene");

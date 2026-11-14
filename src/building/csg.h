@@ -2,6 +2,9 @@
 
 #include "building/scene_values.h"
 
+#include <algorithm>
+#include <type_traits>
+
 namespace hip_demo {
 
 inline void append_csg(SceneDescription& scene, const scene_ast::Csg& source,
@@ -23,11 +26,29 @@ inline void append_csg(SceneDescription& scene, const scene_ast::Csg& source,
         }
         if (scene.csg_leaves.size() >= csg_outside)
             errors.fail(node.where, "CSG exceeds the leaf index limit");
-        const auto primitive = std::visit([&](const auto& shape) {
-            return SceneValues{errors}.primitive(shape);
+        auto leaf = std::visit([&](const auto& shape) {
+            SceneCsgLeaf result;
+            if constexpr (std::is_same_v<std::decay_t<decltype(shape)>, scene_ast::Text>) {
+                const auto text = SceneValues{errors}.text(shape);
+                const auto same = std::find_if(scene.csg_texts.begin(), scene.csg_texts.end(),
+                    [&](const SceneText& other) {
+                        return text.font == other.font && text.value == other.value &&
+                            text.size == other.size && text.depth == other.depth &&
+                            text.position.x == other.position.x && text.position.y == other.position.y &&
+                            text.position.z == other.position.z;
+                    });
+                result.text = true;
+                result.text_index = static_cast<std::uint32_t>(same - scene.csg_texts.begin());
+                if (same == scene.csg_texts.end()) scene.csg_texts.push_back(text);
+            } else {
+                result.shape = SceneValues{errors}.primitive(shape);
+            }
+            return result;
         }, node.shape);
+        leaf.when_inside = yes;
+        leaf.when_outside = no;
         const auto index = static_cast<std::uint32_t>(scene.csg_leaves.size());
-        scene.csg_leaves.push_back({primitive, yes, no});
+        scene.csg_leaves.push_back(leaf);
         return index;
     };
     object.entry = compile(compile, source.root, csg_inside, csg_outside);

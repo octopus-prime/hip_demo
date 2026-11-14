@@ -11,6 +11,7 @@
 #include <map>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 
 SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
     using namespace scene_ast;
@@ -74,9 +75,9 @@ SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
             } else if constexpr (std::is_same_v<T, Csg>) {
                 hip_demo::append_csg(scene, value, material_reference(value), errors);
             } else if constexpr (std::is_same_v<T, Text>) {
-                scene.texts.push_back({values.string(value.font, value.where), values.string(value.value, value.where),
-                                       values.positive(value.size, value.where), values.positive(value.depth, value.where),
-                                       values.vector(value.position, value.where), material_reference(value)});
+                auto text = values.text(value);
+                text.material = material_reference(value);
+                scene.texts.push_back(std::move(text));
             } else {
                 SceneMesh mesh;
                 if constexpr (std::is_same_v<T, Mesh>) {
@@ -116,9 +117,12 @@ SceneDescription load_scene_description(const std::string& path) {
             mesh.file = (directory / std::filesystem::path(mesh.file)).lexically_normal().string();
         }
     }
-    for (auto& text_object : scene.texts) {
-        text_object.font = (directory / std::filesystem::path(text_object.font)).lexically_normal().string();
-    }
+    const auto resolve_fonts = [&](auto& texts) {
+        for (auto& text : texts)
+            text.font = (directory / std::filesystem::path(text.font)).lexically_normal().string();
+    };
+    resolve_fonts(scene.texts);
+    resolve_fonts(scene.csg_texts);
     return scene;
 }
 
