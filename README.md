@@ -4,7 +4,7 @@ A C++23 GPU path tracer rendering a Cornell-style box with red and green walls,
 a ceiling area light, four spheres, three tilted tori, a faceted crystal, and
 a copper-colored low-poly cat. A separate detail scene has a luminous torus,
 mirror and glass spheres, and an imported mesh.
-HIP RT traverses custom bounding-box primitives for the spheres and tori and
+HIP RT traverses custom bounding-box primitives for spheres, tori and extruded text, and
 native triangles for the meshes. The room is intersected directly.
 The polished sphere next to the crystal reflects it like a mirror, while a
 separate glass sphere shows transparency and refraction.
@@ -20,11 +20,17 @@ and BMP writing.
 - CMake 3.25 or newer
 - AMD HIP SDK 7.1, including HIP RT 3.0, its device bitcode and runtime bundles
 - Boost 1.92 or newer headers
+- Git and internet access on first configure to fetch the pinned FreeType source
 - A compatible AMD GPU
 
 On Windows, CMake defaults to `boost_1_92_0` in the user's Downloads directory.
 Set the `Boost_ROOT` CMake cache entry to use a different installation. The
 headers are found locally; CMake does not download them.
+
+FreeType 2.14.1 is built as a static, host-only dependency. CMake fetches a pinned
+commit from the official FreeType repository; no font files are downloaded.
+For offline builds, set `FETCHCONTENT_SOURCE_DIR_FREETYPE` to a local FreeType
+source directory. Compressed fonts and optional shaping/image dependencies are disabled.
 
 On Windows, CMake finds the standard `C:\Program Files\AMD\ROCm\7.1`
 installation automatically. For a different installation, set
@@ -128,7 +134,12 @@ sphere and a glass sphere alongside it. The suspended emissive torus is the
 light source, including for direct lighting, reflections and refractions.
 The floor has procedural tiles with pronounced recessed-looking grout, using bump
 mapping rather than displaced geometry. The back wall has pale marble with
-dark blue-gray veins, formed by domain-warped fractal noise. The wood grain
+dark blue-gray veins, formed by domain-warped fractal noise. Gold "HIP RT"
+lettering above the dragon projects 0.2 scene units out of the marble: its
+extrusion starts just inside the back wall so there is no gap.
+The lettering uses Windows Arial; change its `font` path in
+[scenes/detail.hipscene](scenes/detail.hipscene) when using another system.
+The wood grain
 is on the ceiling, mapped across X/Z rather than the back wall's X/Y;
 the red left wall displays the Mandelbrot set and the green right wall a Julia set.
 These textures are procedural and need no image files. The mesh uses a cool blue,
@@ -137,6 +148,47 @@ Its fitting dimensions differ from
 the classic scene, and large meshes need additional GPU memory and render time.
 The original scene remains the default and is also selectable with
 `--scene classic`.
+
+### Non-triangulated extruded text
+
+Render the supplied text example:
+
+```powershell
+.\build\bin\hiprt_demo.exe text-preview.bmp 32 --scene .\scenes\text.hipscene
+```
+
+The example uses Windows Arial. Change both `font` paths in
+[scenes/text.hipscene](scenes/text.hipscene) to a local scalable TrueType or
+OpenType font on other systems. Fonts are not bundled; check their licenses
+before redistributing them.
+
+Add a text object after the light in any scene:
+
+```text
+text {
+    font "C:\\Windows\\Fonts\\arial.ttf"
+    value "Hello HIP RT"
+    size 0.8
+    depth 0.25
+    position [-2, 0.02, 0]
+    material gold
+}
+```
+
+`size` is the em size in scene units, not a fitted bounding-box height.
+`position` is the left baseline origin at the back cap; glyphs lie in XY and
+extrude toward +Z by `depth`. Text uses the existing named materials, so it
+casts shadows and participates in reflections and refractions.
+Strings are single-line UTF-8. Spaces, glyph advances and legacy font kerning
+are supported; complex-script shaping, ligatures and bidirectional layout are not.
+Missing glyphs, invalid UTF-8 and font-loading errors are reported explicitly.
+Relative font paths resolve from the scene file's directory.
+
+FreeType decomposes outlines into lines and quadratic/cubic Bezier curves on
+the CPU. HIP RT builds one AABB per visible glyph. GPU custom intersections
+test the caps with the font's fill rule (including counters/holes) and solve
+the curved extrusion sides directly, with analytic normals. No flattening
+or triangulation is used.
 
 ### Scene description files
 
@@ -171,7 +223,7 @@ Scene files control:
 - Room dimensions, wall colors, and the existing procedural surfaces.
 - Named diffuse, Phong, metal (with roughness), and glass materials.
 - One ceiling rectangle or emissive torus, including radiance and dimensions.
-- Any number of spheres, tilted tori, and independently fitted/materialed PLY meshes.
+- Any number of spheres, tilted tori, extruded text objects, and independently fitted/materialed PLY meshes.
   `cat` and `crystal` insert the original procedural models at their original positions.
 
 The detail room selects its textures directly in the description:
@@ -225,6 +277,12 @@ exit code on failure. Run it after changing the GPU, driver or SDK, since the
 renderer no longer performs these checks automatically. After building, it can
 also be run with `ctest --test-dir build -C Release --output-on-failure`.
 
+Text tests cover analytic line/quadratic/cubic intersections, counters, normals,
+inside rays, ray limits and font errors. With an available Arial or DejaVu Sans
+font, CTest also checks font loading and thousands of HIP RT text intersections
+without generating triangles. Set `HIP_DEMO_TEST_FONT` to a scalable font file
+if neither font is found automatically.
+
 The build copies HIP RT runtime bundles and, on Windows, the matching HIP,
 COMGR and HIP RT runtime DLLs alongside the executable. Keep these files
 together: using a different system HIP runtime produced incorrect triangle
@@ -234,3 +292,8 @@ PLY support uses RPly 1.1.3 by Diego Nehab, under the MIT license. Its original
 source and notices are in [third_party/rply](third_party/rply); the build also
 copies `RPLY-LICENSE.txt` next to the executables. Include that notice when
 redistributing the binaries.
+
+Portions of this software are copyright (c) 2025 The FreeType Project
+(https://freetype.org). All rights reserved. FreeType is used under the
+FreeType License; the build copies `FREETYPE-LICENSE.txt` next to the executables.
+Include that notice when redistributing the binaries.

@@ -990,7 +990,7 @@ void render_image(const SceneDescription& description) {
     std::cout << "Rendering on " << device.properties.name << " ("
               << device.properties.gcnArchName << ")...\n";
     std::cout << "Scene: " << description.primitives.size() << " primitives, "
-              << description.meshes.size() << " meshes; "
+              << description.meshes.size() << " meshes, " << description.texts.size() << " text objects; "
               << (adaptive ? "up to " : "")
               << sample_count << " samples per pixel (" << (adaptive ? "adaptive" : "fixed") << ").\n";
 

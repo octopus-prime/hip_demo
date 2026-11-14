@@ -604,9 +604,19 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
     }
     Hit detail_mesh{};
     if (!hit_objects({{0.0f, 0.5f, 1.0f}, {0.0f, 0.0f, -1.0f}}, detail_mesh, scene) ||
-        detail_mesh.object_id != detail_object_count || detail_mesh.material != Material::phong ||
+        detail_mesh.object_id != detail_object_count + 1 || detail_mesh.material != Material::phong ||
         !(detail_mesh.albedo.z > detail_mesh.albedo.y && detail_mesh.albedo.y > detail_mesh.albedo.x)) {
         failed |= 512;
+    }
+    Hit lettering{}, lettering_side{}, bare_wall{};
+    if (!hit_scene({{-1.52f, 3.0f, -2.0f}, {0, 0, -1}}, lettering, scene) ||
+        lettering.object_id != detail_object_count || lettering.material != Material::metal ||
+        fabsf(lettering.point.z + 2.3f) > 0.0001f || lettering.normal.z < 0.999f ||
+        !hit_scene({{-1.64f, 3.0f, -2.4f}, {1, 0, 0}}, lettering_side, scene) ||
+        lettering_side.object_id != detail_object_count || lettering_side.normal.x > -0.999f ||
+        !hit_scene({{-2.2f, 3.0f, -2.0f}, {0, 0, -1}}, bare_wall, scene) ||
+        bare_wall.material != Material::diffuse || fabsf(bare_wall.point.z + 2.5f) > 0.0001f) {
+        failed |= 2048;
     }
     Hit tile{}, grout{}, positive_edge{}, negative_edge{}, corner{}, classic{}, underside{}, grazing{};
     const auto floor_ray = [](float x, float z) {
@@ -785,18 +795,177 @@ void check_description(int device, const char* path) {
     std::cout << "Scene description GPU checks passed.\n";
 }
 
+struct TextProbe {
+    Ray ray;
+    float minimum = 0.001f, maximum = 100;
+    bool expected = false;
+    TextIntersection hit{};
+    unsigned int object_id = 0;
+    SceneMaterial material;
+};
+
+__global__ void check_text_probes(TraceScene scene, const TextProbe* probes, unsigned int count,
+                                  unsigned int* failures) {
+    const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    const auto& probe = probes[index];
+    hiprtRay ray{};
+    ray.origin = probe.ray.origin;
+    ray.direction = probe.ray.direction;
+    ray.minT = probe.minimum;
+    ray.maxT = probe.maximum;
+    hiprtGeomCustomTraversalClosest traversal(
+        scene.geometry, ray, hiprtTraversalHintDefault, nullptr, scene.functions);
+    const hiprtHit actual = traversal.getNextHit();
+    unsigned int failed = actual.hasHit() != probe.expected ? 1 : 0;
+    if (actual.hasHit() && probe.expected &&
+        (fabsf(actual.t - probe.hit.distance) > 0.0001f ||
+         dot(normalize(actual.normal), vector3(probe.hit.normal)) < 0.999f)) failed |= 2;
+    if (probe.minimum == 0.001f && probe.maximum == 100) {
+        Hit hit{};
+        const bool found = hit_objects(probe.ray, hit, scene);
+        const float3 outward = vector3(probe.hit.normal);
+        if (found != probe.expected || (found &&
+            (fabsf(hit.distance - probe.hit.distance) > 0.0001f || hit.object_id != probe.object_id ||
+             hit.material != probe.material.kind || hit.albedo.x != probe.material.albedo.x ||
+             hit.front_face != (dot(probe.ray.direction, outward) < 0)))) failed |= 4;
+    }
+    failures[index] = failed;
+}
+
+__global__ void check_mixed_text(TraceScene scene, TextProbe probe, unsigned int* failure) {
+    unsigned int failed = 0;
+    Hit hit{};
+    if (!hit_objects(probe.ray, hit, scene) || hit.object_id != probe.object_id + 1 ||
+        hit.material != probe.material.kind || fabsf(hit.distance - probe.hit.distance) > 0.0001f) failed |= 1;
+    if (!hit_objects({{-20, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 0 ||
+        fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 2;
+    const float3 a = mesh_points[0], b = mesh_points[2], c = mesh_points[1];
+    const float3 normal = normalize(cross(b - a, c - a));
+    const float3 center = (a + b + c) / 3;
+    if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 3 ||
+        hit.material != Material::phong || fabsf(hit.distance - 0.25f) > 0.0001f) failed |= 4;
+    const TextCurve cubic[2]{{{0, 0, 0, 2}, {0, 3, -3, 0}}, {{2, -2, 0, 0}, {0, 0, 0, 0}}};
+    TextGlyph glyph;
+    glyph.depth = 0.5f;
+    glyph.curve_count = 2;
+    glyph.normal_sign = -1;
+    TextIntersection curved_hit{};
+    if (!intersect_text(glyph, cubic, {0.25f, 2, 0.25f}, {0, -1, 0}, 0.001f, 100, curved_hit) ||
+        fabsf(curved_hit.distance - 1.25f) > 0.0001f) failed |= 8;
+    *failure = failed;
+}
+
+void check_text_scene(int device, const char* font) {
+    auto description = load_scene_description(builtin_scene_path(false));
+    description.primitives.clear();
+    description.meshes.clear();
+    description.texts = {
+        {font, "BO S", 1.5f, 0.3f, {10, 0, 0}, {{0.8f, 0.2f, 0.1f}, Material::metal, 0}},
+        {font, "BO", 0.7f, 0.5f, {10, 3, -1}, {{0.2f, 0.5f, 0.9f}, Material::glass, 0}}
+    };
+    TextGeometry geometry;
+    for (unsigned int index = 0; index < description.texts.size(); ++index) {
+        append_text_geometry(geometry, description.texts[index], index);
+    }
+    std::vector<TextProbe> probes;
+    const auto append_probe = [&](Ray ray, float minimum = 0.001f, float maximum = 100) {
+        TextProbe probe;
+        probe.ray = ray; probe.minimum = minimum; probe.maximum = maximum;
+        for (const auto& glyph : geometry.glyphs) {
+            TextIntersection hit{};
+            if (intersect_text(glyph, geometry.curves.data(),
+                               {ray.origin.x, ray.origin.y, ray.origin.z},
+                               {ray.direction.x, ray.direction.y, ray.direction.z},
+                               minimum, maximum, hit)) {
+                maximum = hit.distance;
+                probe.hit = hit;
+                probe.expected = true;
+                probe.object_id = glyph.object_id;
+                probe.material = glyph.material;
+            }
+        }
+        probes.push_back(probe);
+    };
+    unsigned int cap_hits = 0, cap_misses = 0;
+    for (const auto& glyph : geometry.glyphs) {
+        const float z = glyph.position.z;
+        for (int row = 0; row < 13; ++row) {
+            const float y = glyph.minimum.y + (glyph.maximum.y - glyph.minimum.y) * (row + 0.37f) / 13;
+            for (int column = 0; column < 13; ++column) {
+                const float x = glyph.minimum.x + (glyph.maximum.x - glyph.minimum.x) * (column + 0.41f) / 13;
+                append_probe({{x, y, z + 2}, {0, 0, -1}});
+                if (probes.back().expected) ++cap_hits; else ++cap_misses;
+                append_probe({{x, y, z - 2}, {0, 0, 1}});
+                append_probe({{x, y, z + 2}, {0, 0, -1}}, 1.9f);
+                append_probe({{x, y, z + 2}, {0, 0, -1}}, 0.001f, 1);
+                append_probe({{x, y, z + glyph.depth * 0.5f}, {1, 0, 0}});
+                append_probe({{x, y, z + glyph.depth * 0.5f}, {0, -1, 0}});
+                append_probe({{x, y, z + 2}, {0.1f, 0.03f, -1}});
+            }
+        }
+    }
+    if (!cap_hits || !cap_misses) throw std::runtime_error("Text test must exercise filled and empty cap regions");
+    const HiprtScene scene(device, description);
+    if (!scene.scene().geometry || scene.scene().mesh || scene.scene().mesh_triangle_count != 0) {
+        throw std::runtime_error("Text must use custom geometry, not triangles");
+    }
+    auto device_probes = allocate_device<TextProbe>(probes.size(), "Allocating text probes");
+    auto failures = allocate_device<unsigned int>(probes.size(), "Allocating text probe results");
+    check_hip(hipMemcpy(device_probes.get(), probes.data(), probes.size() * sizeof(TextProbe), hipMemcpyHostToDevice),
+              "Uploading text probes");
+    const auto count = static_cast<unsigned int>(probes.size());
+    hipLaunchKernelGGL(check_text_probes, dim3((count + 63) / 64), dim3(64), 0, 0,
+                       scene.scene(), device_probes.get(), count, failures.get());
+    check_hip(hipGetLastError(), "Launching text intersection checks");
+    std::vector<unsigned int> results(count);
+    check_hip(hipMemcpy(results.data(), failures.get(), results.size() * sizeof(unsigned int), hipMemcpyDeviceToHost),
+              "Reading text intersection checks");
+    for (unsigned int index = 0; index < count; ++index) {
+        if (results[index]) throw std::runtime_error("Text HIP RT probe " + std::to_string(index) +
+                                                    " failed (flags " + std::to_string(results[index]) + ")");
+    }
+    ScenePrimitive sphere;
+    sphere.center = {-20, 1, -20};
+    sphere.radius = 0.5f;
+    description.primitives.push_back(sphere);
+    SceneMesh crystal;
+    crystal.kind = SceneMeshKind::crystal;
+    description.meshes.push_back(crystal);
+    const HiprtScene mixed(device, description);
+    const auto sample = std::find_if(probes.begin(), probes.end(), [](const TextProbe& p) { return p.expected; });
+    hipLaunchKernelGGL(check_mixed_text, dim3(1), dim3(1), 0, 0, mixed.scene(), *sample, failures.get());
+    check_hip(hipGetLastError(), "Launching mixed text checks");
+    unsigned int mixed_failure = 0;
+    check_hip(hipMemcpy(&mixed_failure, failures.get(), sizeof(mixed_failure), hipMemcpyDeviceToHost),
+              "Reading mixed text checks");
+    if (mixed_failure) throw std::runtime_error("Mixed text scene failed (flags " + std::to_string(mixed_failure) + ")");
+    description.primitives.clear();
+    description.meshes.clear();
+    description.texts[0].value = "   ";
+    description.texts.resize(1);
+    const HiprtScene spaces(device, description);
+    if (spaces.scene().geometry || spaces.scene().mesh) throw std::runtime_error("Spaces must not create geometry");
+    std::cout << "Text HIP RT checks passed (" << count << " rays, no triangulation).\n";
+}
+
 }
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 1 && argc != 4 && argc != 5) {
-            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply [scene.hipscene]]");
+        const bool text_mode = argc == 3 && std::string_view(argv[1]) == "--text";
+        if (!text_mode && argc != 1 && argc != 4 && argc != 5) {
+            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply [scene.hipscene]] | --text font");
         }
         const SelectedDevice device = select_device();
         std::cout << "Testing on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
         // Establish the HIP context before HIP RT queries it.
         const auto context_buffer = allocate_device<unsigned int>(1, "Initializing HIP context");
+        if (text_mode) {
+            check_text_scene(device.id, argv[2]);
+            return 0;
+        }
         const HiprtScene scene(device.id);
         run_checks(scene.scene());
         if (argc >= 4) {

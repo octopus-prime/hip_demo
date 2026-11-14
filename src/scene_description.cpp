@@ -75,8 +75,16 @@ struct Mesh {
     std::string material;
 };
 
+struct Text {
+    Position where;
+    std::string font, value;
+    float size, depth;
+    SceneVector position;
+    std::string material;
+};
+
 using Light = std::variant<RectangleLight, TorusLight>;
-using Object = std::variant<Sphere, Torus, Mesh, SceneMeshKind>;
+using Object = std::variant<Sphere, Torus, Mesh, Text, SceneMeshKind>;
 
 struct ParsedScene {
     Image image;
@@ -141,7 +149,7 @@ auto keyword(const char* word) {
 
 bp::rule<struct position_p_, Position> position_p = "source position";
 bp::rule<struct identifier_p_, std::string> identifier_p = "identifier";
-bp::rule<struct string_p_, std::string> string_p = "quoted path";
+bp::rule<struct string_p_, std::string> string_p = "quoted string";
 bp::rule<struct scalar_p_, float> scalar_p = "finite number";
 bp::rule<struct positive_p_, float> positive_p = "positive number";
 bp::rule<struct integer_p_, int> integer_p = "positive integer";
@@ -178,6 +186,7 @@ bp::rule<struct sphere_p_, Sphere> sphere_p = "sphere";
 bp::rule<struct torus_p_, Torus> torus_p = "torus";
 bp::rule<struct mesh_up_p_, MeshUp> mesh_up_p = "mesh up (y or z)";
 bp::rule<struct mesh_p_, Mesh> mesh_p = "mesh";
+bp::rule<struct text_p_, Text> text_p = "extruded text";
 bp::rule<struct builtin_p_, SceneMeshKind> builtin_p = "cat or crystal";
 bp::rule<struct object_p_, Object> object_p = "object";
 bp::rule<struct scene_p_, ParsedScene> scene_p = "hipscene 1 scene";
@@ -187,7 +196,7 @@ auto identifier_p_def = bp::lexeme[letter >> *identifier_char];
 auto string_p_def = bp::lexeme['"' >>
     *((bp::lit('\\') >> bp::char_("\"\\")) | (bp::char_ - bp::char_("\"\\\r\n"))) > '"']
     [checked([](const std::string& value) { return !value.empty() && value.find('\0') == std::string::npos; },
-             "paths must not be empty or contain NUL")];
+             "strings must not be empty or contain NUL")];
 auto scalar_p_def = bp::lexeme[&(number_syntax >> !(identifier_char | bp::char_("+.-"))) >> bp::double_]
     [([](auto& context) {
         const double value = bp::_attr(context);
@@ -272,9 +281,13 @@ auto mesh_up_p_def = (keyword("y") >> bp::attr(MeshUp::y)) | (keyword("z") >> bp
 auto mesh_p_def = position_p >> keyword("mesh") > '{'
     > keyword("file") > string_p > keyword("up") > mesh_up_p > keyword("fit") > dimensions_p
     > keyword("position") > vector_p > keyword("material") > identifier_p > '}';
+auto text_p_def = position_p >> keyword("text") > '{'
+    > keyword("font") > string_p > keyword("value") > string_p
+    > keyword("size") > positive_p > keyword("depth") > positive_p
+    > keyword("position") > vector_p > keyword("material") > identifier_p > '}';
 auto builtin_p_def = (keyword("cat") >> bp::attr(SceneMeshKind::cat)) |
                      (keyword("crystal") >> bp::attr(SceneMeshKind::crystal));
-auto object_p_def = sphere_p | torus_p | mesh_p | builtin_p;
+auto object_p_def = sphere_p | torus_p | mesh_p | text_p | builtin_p;
 auto scene_p_def = keyword("hipscene") > keyword("1")
     > image_p > sampling_p > camera_p > room_p > *material_p > light_p > *object_p > bp::eoi;
 
@@ -283,7 +296,7 @@ BOOST_PARSER_DEFINE_RULES(
     dimensions_p, color_p, radiance_p, roughness_p, image_p, fixed_p, adaptive_p, sampling_p,
     camera_p, surface_p, wood_p, marble_p, floor_p, ceiling_p, back_p, left_p, right_p, room_p,
     diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
-    mesh_up_p, mesh_p, builtin_p, object_p, scene_p);
+    mesh_up_p, mesh_p, text_p, builtin_p, object_p, scene_p);
 
 SceneDescription describe_scene(const ParsedScene& parsed, const SceneErrors& errors) {
     SceneDescription scene;
@@ -368,6 +381,9 @@ SceneDescription describe_scene(const ParsedScene& parsed, const SceneErrors& er
                     primitive.tilt_cosine = static_cast<float>(std::cos(angle));
                 }
                 scene.primitives.push_back(primitive);
+            } else if constexpr (std::is_same_v<T, Text>) {
+                scene.texts.push_back({value.font, value.value, value.size, value.depth,
+                                       value.position, material_reference(value)});
             } else {
                 SceneMesh mesh;
                 if constexpr (std::is_same_v<T, Mesh>) {
@@ -416,6 +432,9 @@ SceneDescription load_scene_description(const std::string& path) {
         if (mesh.kind == SceneMeshKind::ply) {
             mesh.file = (directory / std::filesystem::path(mesh.file)).lexically_normal().string();
         }
+    }
+    for (auto& text_object : scene.texts) {
+        text_object.font = (directory / std::filesystem::path(text_object.font)).lexically_normal().string();
     }
     return scene;
 }

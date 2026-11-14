@@ -68,6 +68,23 @@ int main(int argc, char** argv) {
         rejects(replace(text, "back marble_detail", "back marble_detail_extra"), "back surface");
         const auto escaped = parse_scene_description(replace(text, "scene_test.bmp", R"(dir\\a\"b.bmp)"));
         require(escaped.output == "dir\\a\"b.bmp", "quoted string escapes");
+        const std::string text_object = R"(
+text { font "font.ttf" value "BO S" size 1.5 depth 0.2 position [-1, 0.2, 0] material blue }
+)";
+        const auto with_text = parse_scene_description(text + text_object);
+        require(with_text.texts.size() == 1 && with_text.texts[0].value == "BO S" &&
+                with_text.texts[0].size == 1.5f && with_text.texts[0].depth == 0.2f &&
+                with_text.texts[0].position.x == -1 && with_text.texts[0].material.kind == Material::metal,
+                "text grammar and conversion");
+        const auto text_fixture = std::filesystem::absolute(argv[1]).parent_path() / "text.hipscene";
+        const auto loaded_text = load_scene_description(text_fixture.string());
+        require(loaded_text.texts[0].font ==
+                    (text_fixture.parent_path() / "fonts" / "example.ttf").lexically_normal().string(),
+                "font paths resolve relative to scene");
+        rejects(text + replace(text_object, "depth 0.2", "depth 0"), "positive");
+        rejects(text + replace(text_object, "size 1.5", "size -1"), "positive");
+        rejects(text + replace(text_object, "material blue", "material missing"), "unknown material");
+        rejects(text + replace(text_object, "\"BO S\"", "\"\""), "must not be empty");
         const auto adaptive = parse_scene_description(replace(text, "sampling fixed {\n    count 3\n    batch 2\n}",
             "sampling adaptive {\n    min 3\n    specular_min 7\n    max 11\n    batch 4\n"
             "    relative_error 0.08\n    brightness_floor 0.03\n}")).settings.sampling;

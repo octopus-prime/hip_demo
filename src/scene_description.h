@@ -73,12 +73,20 @@ struct SceneMesh {
     SceneMaterial material;
 };
 
+struct SceneText {
+    std::string font, value;
+    float size = 1, depth = 0.2f;
+    SceneVector position;
+    SceneMaterial material;
+};
+
 struct SceneDescription {
     int width = 0, height = 0;
     std::string output;
     SceneSettings settings;
     std::vector<ScenePrimitive> primitives;
     std::vector<SceneMesh> meshes;
+    std::vector<SceneText> texts;
 };
 
 SceneDescription parse_scene_description(std::string_view text, const std::string& source = "<scene>");

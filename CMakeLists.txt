@@ -18,6 +18,21 @@ endif()
 find_package(Boost 1.92 REQUIRED)
 cmake_policy(POP)
 
+include(FetchContent)
+set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(FT_DISABLE_BROTLI ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF)
+FetchContent_Declare(freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG 3bd82b5f543bc84ccf2b1d0cdb63b95218099ee6)
+FetchContent_MakeAvailable(freetype)
+if(MSVC)
+    set_property(TARGET freetype PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+
 find_program(
     HIPCC_EXECUTABLE
     NAMES hipcc hipcc.bat
@@ -209,8 +224,14 @@ target_link_libraries(scene_description PRIVATE Boost::headers)
 target_compile_definitions(scene_description PRIVATE
     NOMINMAX
     HIP_DEMO_SCENE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
+add_library(text_geometry STATIC src/text_geometry.cpp)
+target_link_libraries(text_geometry PRIVATE freetype)
+add_custom_command(TARGET hiprt_runtime POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${freetype_SOURCE_DIR}/docs/FTL.TXT"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/FREETYPE-LICENSE.txt"
+    VERBATIM)
 if(MSVC)
-    set_property(TARGET rply ply_mesh scene_description PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    set_property(TARGET rply ply_mesh scene_description text_geometry PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
 function(add_hiprt_executable target)
@@ -224,10 +245,12 @@ function(add_hiprt_executable target)
             -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
             "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
             "$<TARGET_FILE:scene_description>" ${HIPRT_LINK_OPTIONS}
+            "$<TARGET_FILE:text_geometry>" "$<TARGET_FILE:freetype>"
             -o "${output}"
         DEPENDS "${source}" "${HIPRT_SCENE_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/ply_mesh.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene_description.h" ply_mesh rply scene_description
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/text_geometry.h" text_geometry freetype
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
@@ -266,6 +289,23 @@ if(MSVC)
 endif()
 add_test(NAME scene_description_tests COMMAND scene_description_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
+add_executable(text_geometry_tests tests/text_geometry_tests.cpp)
+target_include_directories(text_geometry_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(text_geometry_tests PRIVATE text_geometry)
+if(MSVC)
+    set_property(TARGET text_geometry_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+find_file(HIP_DEMO_TEST_FONT NAMES arial.ttf DejaVuSans.ttf
+    PATHS "$ENV{WINDIR}/Fonts" /usr/share/fonts/truetype/dejavu)
+if(HIP_DEMO_TEST_FONT)
+    add_test(NAME text_geometry_tests COMMAND text_geometry_tests "${HIP_DEMO_TEST_FONT}")
+    add_test(NAME hiprt_text_tests COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
+        --text "${HIP_DEMO_TEST_FONT}")
+    set_tests_properties(hiprt_text_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+else()
+    add_test(NAME text_geometry_tests COMMAND text_geometry_tests)
+    message(STATUS "Set HIP_DEMO_TEST_FONT to enable font-loading and HIP RT text tests")
+endif()
 add_custom_target(
     run
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"

@@ -6,6 +6,7 @@
 
 #include "ply_mesh.h"
 #include "scene_description.h"
+#include "text_geometry.h"
 
 namespace {
 struct TriangleMaterial {
@@ -16,6 +17,9 @@ struct TriangleMaterial {
 struct PrimitiveData {
     const ScenePrimitive* objects;
     unsigned int count;
+    const TextGlyph* glyphs;
+    const TextCurve* curves;
+    unsigned int glyph_count;
 };
 
 struct TraceScene {
@@ -29,6 +33,8 @@ struct TraceScene {
     const SceneSettings* settings;
     const ScenePrimitive* primitives;
     const TriangleMaterial* triangle_materials;
+    const TextGlyph* glyphs;
+    unsigned int primitive_count;
 };
 }
 
@@ -40,6 +46,18 @@ __device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, c
     const auto* data = static_cast<const PrimitiveData*>(
         table.funcDataSets[geom_type * table.numRayTypes + ray_type].intersectFuncData);
     const Ray scene_ray{ray.origin, ray.direction};
+    if (result.primID >= data->count) {
+        const auto index = result.primID - data->count;
+        TextIntersection hit{};
+        if (index >= data->glyph_count ||
+            !intersect_text(data->glyphs[index], data->curves,
+                            {ray.origin.x, ray.origin.y, ray.origin.z},
+                            {ray.direction.x, ray.direction.y, ray.direction.z},
+                            ray.minT, ray.maxT, hit)) return false;
+        result.t = hit.distance;
+        result.normal = {hit.normal.x, hit.normal.y, hit.normal.z};
+        return true;
+    }
     Hit hit{};
     if (result.primID >= data->count ||
         !hit_described_primitive(scene_ray, data->objects[result.primID], ray.maxT, hit) ||
@@ -86,8 +104,14 @@ __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene 
         candidate.distance = result.t;
         candidate.point = ray.origin + result.t * ray.direction;
         set_face_normal(candidate, ray, result.normal);
-        candidate.object_id = result.primID;
-        set_material(candidate, scene.primitives[result.primID].material);
+        if (result.primID < scene.primitive_count) {
+            candidate.object_id = result.primID;
+            set_material(candidate, scene.primitives[result.primID].material);
+        } else {
+            const auto& glyph = scene.glyphs[result.primID - scene.primitive_count];
+            candidate.object_id = glyph.object_id;
+            set_material(candidate, glyph.material);
+        }
         closest_hit = candidate;
         found = true;
     }
@@ -337,7 +361,16 @@ public:
 
         constexpr float margin = 0.01f;
         const auto object_count = static_cast<unsigned int>(description.primitives.size());
-        std::vector<float3> bounds(object_count * 2);
+        primitive_count_ = object_count;
+        TextGeometry text;
+        for (std::size_t index = 0; index < description.texts.size(); ++index) {
+            append_text_geometry(text, description.texts[index], object_count + static_cast<unsigned int>(index));
+        }
+        if (text.glyphs.size() > std::numeric_limits<unsigned int>::max() - object_count) {
+            throw std::runtime_error("Scene exceeds the custom primitive index limit");
+        }
+        const auto custom_count = object_count + static_cast<unsigned int>(text.glyphs.size());
+        std::vector<float3> bounds(static_cast<std::size_t>(custom_count) * 2);
         for (unsigned int index = 0; index < object_count; ++index) {
             const auto& object = description.primitives[index];
             const float sphere_size = object.radius;
@@ -355,6 +388,22 @@ public:
             check_hip(hipMemcpy(primitives_.get(), description.primitives.data(),
                                 object_count * sizeof(ScenePrimitive), hipMemcpyHostToDevice),
                       "Uploading scene primitives");
+        }
+        if (!text.glyphs.empty()) {
+            text_glyphs_ = allocate_device<TextGlyph>(text.glyphs.size(), "Allocating text glyphs");
+            text_curves_ = allocate_device<TextCurve>(text.curves.size(), "Allocating text curves");
+            check_hip(hipMemcpy(text_glyphs_.get(), text.glyphs.data(), text.glyphs.size() * sizeof(TextGlyph),
+                                hipMemcpyHostToDevice), "Uploading text glyphs");
+            check_hip(hipMemcpy(text_curves_.get(), text.curves.data(), text.curves.size() * sizeof(TextCurve),
+                                hipMemcpyHostToDevice), "Uploading text curves");
+            for (std::size_t index = 0; index < text.glyphs.size(); ++index) {
+                const auto& glyph = text.glyphs[index];
+                const std::size_t offset = (object_count + index) * 2;
+                bounds[offset] = {glyph.minimum.x - margin, glyph.minimum.y - margin, glyph.minimum.z - margin};
+                bounds[offset + 1] = {glyph.maximum.x + margin, glyph.maximum.y + margin, glyph.maximum.z + margin};
+            }
+        }
+        if (custom_count != 0) {
             bounds_ = allocate_device<float3>(bounds.size(), "Allocating HIP RT bounding boxes");
             check_hip(hipMemcpy(bounds_.get(), bounds.data(), bounds.size() * sizeof(float3),
                                 hipMemcpyHostToDevice),
@@ -364,7 +413,7 @@ public:
             input.type = hiprtPrimitiveTypeAABBList;
             input.geomType = 0;
             input.primitive.aabbList.aabbs = bounds_.get();
-            input.primitive.aabbList.aabbCount = object_count;
+            input.primitive.aabbList.aabbCount = custom_count;
             input.primitive.aabbList.aabbStride = 2 * sizeof(float3);
             const hiprtBuildOptions options{};
             std::size_t temporary_size = 0;
@@ -388,7 +437,8 @@ public:
                         "Creating HIP RT function table");
             hiprtFuncDataSet function_data{};
             primitive_data_ = allocate_device<PrimitiveData>(1, "Allocating primitive dispatch data");
-            const PrimitiveData data{primitives_.get(), object_count};
+            const PrimitiveData data{primitives_.get(), object_count, text_glyphs_.get(), text_curves_.get(),
+                                     static_cast<unsigned int>(text.glyphs.size())};
             check_hip(hipMemcpy(primitive_data_.get(), &data, sizeof(data), hipMemcpyHostToDevice),
                       "Uploading primitive dispatch data");
             function_data.intersectFuncData = primitive_data_.get();
@@ -398,7 +448,7 @@ public:
 
         std::vector<float4> vertices;
         std::vector<TriangleMaterial> triangle_materials;
-        unsigned int mesh_id = object_count;
+        unsigned int mesh_id = object_count + static_cast<unsigned int>(description.texts.size());
         for (const auto& mesh : description.meshes) {
             SceneMaterial material = mesh.material;
             if (mesh.kind == SceneMeshKind::crystal) {
@@ -467,13 +517,15 @@ public:
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
                 mesh_triangle_count_, cat_detail_start_, detail_, settings_.get(),
-                primitives_.get(), triangle_materials_.get()};
+                primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_};
     }
 
 private:
     HiprtContextOwner context_;
     std::unique_ptr<SceneSettings, HipBufferDeleter> settings_;
     std::unique_ptr<ScenePrimitive, HipBufferDeleter> primitives_;
+    std::unique_ptr<TextGlyph, HipBufferDeleter> text_glyphs_;
+    std::unique_ptr<TextCurve, HipBufferDeleter> text_curves_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;
     HiprtGeometryOwner geometry_;
     std::unique_ptr<PrimitiveData, HipBufferDeleter> primitive_data_;
@@ -482,6 +534,7 @@ private:
     std::unique_ptr<TriangleMaterial, HipBufferDeleter> triangle_materials_;
     HiprtGeometryOwner mesh_;
     unsigned int mesh_triangle_count_ = 0;
+    unsigned int primitive_count_ = 0;
     unsigned int cat_detail_start_ = 0;
     bool detail_ = false;
 };

@@ -1,0 +1,22 @@
+hipscene 1
+image { size [17, 9] output "text_test.bmp" }
+sampling fixed { count 1 batch 1 }
+camera { position [0, 2, 8] target [0, 1, 0] half_view_height 0.4 }
+room {
+    size [6, 4, 5]
+    floor color [0.7, 0.7, 0.7]
+    ceiling color [0.7, 0.7, 0.7]
+    back color [0.7, 0.7, 0.7]
+    left color [0.7, 0.1, 0.1]
+    right color [0.1, 0.7, 0.1]
+}
+material gold = metal [0.9, 0.6, 0.2] roughness 0.1
+light ceiling_rectangle { center [0, 0] size [1, 1] radiance [10, 10, 10] }
+text {
+    font "fonts/example.ttf"
+    value "Relative font path"
+    size 1
+    depth 0.2
+    position [0, 0, 0]
+    material gold
+}
