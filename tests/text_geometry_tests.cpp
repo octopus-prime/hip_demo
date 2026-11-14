@@ -1,4 +1,5 @@
 #include "surface/text.h"
+#include "polynomial_cases.h"
 
 #include <algorithm>
 #include <iostream>
@@ -9,7 +10,7 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-void line(std::vector<TextCurve>& curves, double x, double y, double end_x, double end_y) {
+void line(std::vector<TextCurve>& curves, float x, float y, float end_x, float end_y) {
     curves.push_back({{x, end_x - x, 0, 0}, {y, end_y - y, 0, 0}});
 }
 
@@ -56,16 +57,42 @@ void check_intersections() {
 }
 
 void check_roots() {
-    double roots[4];
-    const double cubic[4]{-0.08, 0.66, -1.5, 1};
-    require(text_detail::curve_roots(cubic, roots) == 3 && std::abs(roots[0] - 0.2) < 1e-8 &&
-            std::abs(roots[1] - 0.5) < 1e-8 && std::abs(roots[2] - 0.8) < 1e-8, "three cubic roots");
-    const double tangent[4]{-0.125, 0.75, -1.5, 1};
-    require(text_detail::curve_roots(tangent, roots) == 1 && std::abs(roots[0] - 0.5) < 1e-8, "triple root");
-    const double endpoints[4]{0, -1, 1, 0};
+    float roots[4];
+    const float cubic[4]{-0.08f, 0.66f, -1.5f, 1};
+    require(text_detail::curve_roots(cubic, roots) == 3 && std::abs(roots[0] - 0.2f) < 2e-6f &&
+            std::abs(roots[1] - 0.5f) < 2e-6f && std::abs(roots[2] - 0.8f) < 2e-6f, "three cubic roots");
+    const float tangent[4]{-0.125f, 0.75f, -1.5f, 1};
+    require(text_detail::curve_roots(tangent, roots) == 1 && roots[0] == 0.5f, "triple root");
+    const float endpoints[4]{0, -1, 1, 0};
     require(text_detail::curve_roots(endpoints, roots) == 2 && roots[0] == 0 && roots[1] == 1, "endpoint roots");
-    const double linear[4]{-1e-20, 2e-20, 0, 0};
+    const float linear[4]{-1e-20f, 2e-20f, 0, 0};
     require(text_detail::curve_roots(linear, roots) == 1 && roots[0] == 0.5, "scale-independent linear root");
+    const float nearly_quadratic[4]{0.1875f, -0.9999971389770508f, 0.9999847412109375f, 0.0000152587890625f};
+    require(text_detail::curve_roots(nearly_quadratic, roots) == 2 &&
+            std::abs(roots[0] - 0.25f) < 2e-6f && std::abs(roots[1] - 0.75f) < 2e-6f,
+            "nearly quadratic cubic must retain both small roots");
+}
+
+void check_fill_crossings() {
+    // A stationary inflection must cross the scanline, unlike a local extremum.
+    const TextCurve inflection[2]{{{1, 0, 0, 0}, {-0.125f, 0.75f, -1.5f, 1}},
+                                  {{0, 0, 0, 0}, {0.125f, -0.25f, 0, 0}}};
+    TextGlyph glyph;
+    glyph.curve_count = 2;
+    for (bool even_odd : {false, true}) {
+        glyph.even_odd = even_odd;
+        require(text_detail::contains(glyph, inflection, 0.5f, 0), "stationary inflection crossing");
+        require(!text_detail::contains(glyph, inflection, -0.5f, 0), "stationary inflection cancellation");
+        const TextCurve arch[2]{{{0, 2, 0, 0}, {0, 4, -4, 0}},
+                                {{2, -2, 0, 0}, {0, 0, 0, 0}}};
+        require(!text_detail::contains(glyph, arch, -1, 1), "local maximum must not cross");
+        require(!text_detail::contains(glyph, arch, -1, 0), "shared endpoints must cancel");
+        require(text_detail::contains(glyph, arch, 1, 0.999f), "fill just below a tangent");
+        const TextCurve bowl[2]{{{0, 2, 0, 0}, {1, -4, 4, 0}},
+                                {{2, -2, 0, 0}, {1, 0, 0, 0}}};
+        require(!text_detail::contains(glyph, bowl, -1, 0), "local minimum must cancel twice");
+        require(text_detail::contains(glyph, bowl, 1, 0.001f), "fill just above a tangent");
+    }
 }
 
 void check_font(const char* path) {
@@ -116,8 +143,12 @@ void check_font(const char* path) {
 
 int main(int argc, char** argv) {
     try {
+        const unsigned int failures = polynomial_failures();
+        if (failures != 0)
+            throw std::runtime_error("Float polynomial checks failed (flags " + std::to_string(failures) + ")");
         check_roots();
         check_intersections();
+        check_fill_crossings();
         if (argc == 2) check_font(argv[1]);
         std::cout << "Text geometry tests passed.\n";
         return 0;

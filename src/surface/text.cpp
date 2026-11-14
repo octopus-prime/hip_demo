@@ -51,9 +51,9 @@ std::vector<FT_ULong> decode_utf8(const std::string& text) {
 struct OutlineBuilder {
     std::vector<TextCurve> curves;
     FT_Vector current{}, start{};
-    double scale;
-    double min_x = std::numeric_limits<double>::infinity(), min_y = min_x;
-    double max_x = -min_x, max_y = -min_x;
+    float scale;
+    float min_x = std::numeric_limits<float>::infinity(), min_y = min_x;
+    float max_x = -min_x, max_y = -min_x;
     bool contour = false;
     std::exception_ptr error;
 
@@ -71,19 +71,19 @@ struct OutlineBuilder {
 
     void append(FT_Vector a, FT_Vector b, FT_Vector c, int degree) {
         const FT_Vector points[4]{current, a, b, c};
-        double x[4]{}, y[4]{};
+        float x[4]{}, y[4]{};
         for (int i = 0; i <= degree; ++i) {
-            x[i] = points[i].x * scale;
-            y[i] = points[i].y * scale;
+            x[i] = static_cast<float>(points[i].x) * scale;
+            y[i] = static_cast<float>(points[i].y) * scale;
             min_x = std::min(min_x, x[i]); max_x = std::max(max_x, x[i]);
             min_y = std::min(min_y, y[i]); max_y = std::max(max_y, y[i]);
         }
         TextCurve curve;
         curve.x[0] = x[0]; curve.y[0] = y[0];
-        curve.x[1] = degree * (x[1] - x[0]);
-        curve.y[1] = degree * (y[1] - y[0]);
+        curve.x[1] = static_cast<float>(degree) * (x[1] - x[0]);
+        curve.y[1] = static_cast<float>(degree) * (y[1] - y[0]);
         if (degree >= 2) {
-            const double factor = degree == 2 ? 1 : 3;
+            const float factor = degree == 2 ? 1.0f : 3.0f;
             curve.x[2] = factor * (x[0] - 2 * x[1] + x[2]);
             curve.y[2] = factor * (y[0] - 2 * y[1] + y[2]);
         }
@@ -116,8 +116,8 @@ void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::ui
     const std::unique_ptr<FT_FaceRec_, FaceDeleter> face(raw_face);
     if (!FT_IS_SCALABLE(face) || face->units_per_EM == 0) throw std::runtime_error("Text requires a scalable outline font");
     check_freetype(FT_Select_Charmap(face.get(), FT_ENCODING_UNICODE), "Selecting the font Unicode charmap");
-    const double scale = static_cast<double>(text.size) / face->units_per_EM;
-    double advance = 0;
+    const float scale = text.size / face->units_per_EM;
+    float advance = 0;
     FT_UInt previous = 0;
     for (const FT_ULong code : codes) {
         const FT_UInt index = FT_Get_Char_Index(face.get(), code);
@@ -125,7 +125,7 @@ void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::ui
         if (previous && FT_HAS_KERNING(face)) {
             FT_Vector kerning{};
             check_freetype(FT_Get_Kerning(face.get(), previous, index, FT_KERNING_UNSCALED, &kerning), "Reading font kerning");
-            advance += kerning.x * scale;
+            advance += static_cast<float>(kerning.x) * scale;
         }
         check_freetype(FT_Load_Glyph(face.get(), index, FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP),
                        "Loading font outline");
@@ -160,11 +160,9 @@ void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::ui
                 throw std::runtime_error("Text exceeds the curve index limit");
             }
             TextGlyph glyph;
-            glyph.position = {static_cast<float>(text.position.x + advance), text.position.y, text.position.z};
-            glyph.minimum = {static_cast<float>(glyph.position.x + builder.min_x),
-                             static_cast<float>(glyph.position.y + builder.min_y), text.position.z};
-            glyph.maximum = {static_cast<float>(glyph.position.x + builder.max_x),
-                             static_cast<float>(glyph.position.y + builder.max_y), text.position.z + text.depth};
+            glyph.position = {text.position.x + advance, text.position.y, text.position.z};
+            glyph.minimum = {glyph.position.x + builder.min_x, glyph.position.y + builder.min_y, text.position.z};
+            glyph.maximum = {glyph.position.x + builder.max_x, glyph.position.y + builder.max_y, text.position.z + text.depth};
             if (!std::isfinite(glyph.minimum.x) || !std::isfinite(glyph.minimum.y) ||
                 !std::isfinite(glyph.maximum.x) || !std::isfinite(glyph.maximum.y) ||
                 !std::isfinite(glyph.maximum.z) || glyph.maximum.z <= glyph.minimum.z) {
@@ -180,7 +178,7 @@ void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::ui
             geometry.curves.insert(geometry.curves.end(), builder.curves.begin(), builder.curves.end());
             geometry.glyphs.push_back(glyph);
         }
-        advance += face->glyph->advance.x * scale;
+        advance += static_cast<float>(face->glyph->advance.x) * scale;
         previous = index;
     }
 }

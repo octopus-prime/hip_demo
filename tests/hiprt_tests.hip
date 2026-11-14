@@ -3,6 +3,7 @@
 #include "gpu/device.h"
 #include "rendering/renderer.h"
 #include "reference_scene.h"
+#include "analytic_intersection_tests.h"
 
 using namespace hip_demo;
 
@@ -968,6 +969,7 @@ int main(int argc, char** argv) {
                   << device.properties.gcnArchName << ")...\n";
         // Establish the HIP context before HIP RT queries it.
         const auto context_buffer = allocate_device<unsigned int>(1, "Initializing HIP context");
+        if (!text_mode) run_analytic_intersection_tests();
         if (text_mode) {
             check_text_scene(device.id, argv[2]);
             return 0;

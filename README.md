@@ -319,7 +319,13 @@ PNG/BMP output. GPU tests require a compatible GPU. Set the CMake variable
 
 Keep the HIP/HIP RT runtime files copied to `build\bin` alongside the executable.
 Include the copied `RPLY-LICENSE.txt`, `FREETYPE-LICENSE.txt`,
-`LIBPNG-LICENSE.txt` and `ZLIB-LICENSE.txt` when redistributing binaries.
+`LIBPNG-LICENSE.txt`, `ZLIB-LICENSE.txt` and `BOOST-MATH-LICENSE.txt`
+when redistributing binaries.
+
+Sphere, torus and text intersections use analytic single-precision polynomial
+solvers adapted from Boost.Math, with bounded root polishing rather than
+iterative root searches. The adaptation is covered by the
+[Boost Software License](third_party/boost_math/LICENSE_1_0.txt).
 
 PLY support uses RPly 1.1.3 by Diego Nehab under the MIT license; its source and
 notices are in [third_party/rply](third_party/rply).

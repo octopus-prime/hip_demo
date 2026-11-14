@@ -47,9 +47,7 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
             const float cosine = fmaxf(0.0f, dot(hit.normal, light_direction));
             const float light_cosine = fmaxf(0.0f, dot(light.normal, -light_direction));
             Hit shadow_hit{};
-            // The torus intersection is sphere-traced with a finite surface tolerance.
-            const float shadow_tolerance = source.torus
-                ? fminf(0.02f, 0.0025f / fmaxf(light_cosine, 0.1f)) : 0.001f;
+            constexpr float shadow_tolerance = 0.001f;
             if (cosine > 0.0f && light_cosine > 0.0f &&
                 (!hit.tiled_floor || dot(geometric_normal, light_direction) > 0.0f) &&
                 (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||

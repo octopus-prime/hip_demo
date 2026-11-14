@@ -264,6 +264,9 @@ add_custom_command(TARGET hiprt_runtime POST_BUILD
         "${CMAKE_CURRENT_BINARY_DIR}/bin/LIBPNG-LICENSE.txt"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${zlib_SOURCE_DIR}/LICENSE"
         "${CMAKE_CURRENT_BINARY_DIR}/bin/ZLIB-LICENSE.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost_math/LICENSE_1_0.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/BOOST-MATH-LICENSE.txt"
     VERBATIM)
 if(MSVC)
     set_property(TARGET rply ply_mesh scene_description text_geometry app_support png_static zlibstatic
