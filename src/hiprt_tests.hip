@@ -221,6 +221,13 @@ __global__ void check_adaptive_sampling(unsigned int* failures) {
     if (adaptive_converged(stable)) {
         failed |= 16;
     }
+    SceneSampling custom;
+    custom.minimum = 1;
+    AdaptivePixel single{};
+    add_adaptive_sample(single, {1, 1, 1});
+    if (adaptive_converged(single, &custom)) failed |= 32;
+    add_adaptive_sample(single, {1, 1, 1});
+    if (!adaptive_converged(single, &custom)) failed |= 64;
     *failures = failed;
 }
 
@@ -597,7 +604,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
     }
     Hit detail_mesh{};
     if (!hit_objects({{0.0f, 0.5f, 1.0f}, {0.0f, 0.0f, -1.0f}}, detail_mesh, scene) ||
-        detail_mesh.object_id != scene_object_count + 1 || detail_mesh.material != Material::phong ||
+        detail_mesh.object_id != detail_object_count || detail_mesh.material != Material::phong ||
         !(detail_mesh.albedo.z > detail_mesh.albedo.y && detail_mesh.albedo.y > detail_mesh.albedo.x)) {
         failed |= 512;
     }
@@ -674,12 +681,64 @@ void check_loaded_ply(int device, const char* path, MeshUp up) {
     }
 }
 
+__global__ void check_described_scene(TraceScene scene, unsigned int* failure) {
+    unsigned int failed = 0;
+    Hit hit{};
+    if (!hit_custom_objects({{1, 3, -1}, {0, -1, 0}}, hit, scene) ||
+        fabsf(hit.distance - 0.7f) > 0.001f || hit.albedo.x != 0.8f ||
+        hit.material != Material::diffuse) failed |= 1;
+    const auto& torus = scene.primitives[1];
+    const float3 origin = vector3(torus.center) +
+        rotate_x({torus.major_radius, 0.5f, 0}, torus.tilt_sine, torus.tilt_cosine);
+    const float3 direction = rotate_x({0, -1, 0}, torus.tilt_sine, torus.tilt_cosine);
+    if (!hit_custom_objects({origin, direction}, hit, scene) || hit.object_id != 1 ||
+        hit.material != Material::metal || fabsf(hit.distance - 0.4f) > 0.003f) failed |= 2;
+    if (!hit_scene({{3, 1, 4}, {0, -1, 0}}, hit, scene) ||
+        fabsf(hit.distance - 1) > 0.001f || hit.albedo.z != 0.4f) failed |= 4;
+    if (!hit_scene({{1, 5, -2}, {0, 1, 0}}, hit, scene) ||
+        hit.material != Material::emissive || fabsf(hit.distance - 1) > 0.001f) failed |= 8;
+    for (int index = 0; index < 2; ++index) {
+        if (!hit_objects({{static_cast<float>(index * 2), 0.4f, 1}, {0, 0, -1}}, hit, scene) ||
+            hit.object_id != static_cast<unsigned int>(index + 2) ||
+            hit.material != (index == 0 ? Material::diffuse : Material::metal) ||
+            fabsf(hit.distance - 1) > 0.001f) failed |= 16;
+    }
+    if (scene.settings->camera_position.z != 12 || scene.settings->half_view_height != 0.4f ||
+        scene.settings->light.radiance.y != 4) failed |= 32;
+    *failure = failed;
+}
+
+void check_description(int device, const char* path) {
+    auto description = load_scene_description(path);
+    auto failure = allocate_device<unsigned int>(1, "Allocating described scene check");
+    const HiprtScene scene(device, description);
+    hipLaunchKernelGGL(check_described_scene, dim3(1), dim3(1), 0, 0, scene.scene(), failure.get());
+    check_hip(hipGetLastError(), "Launching described scene check");
+    unsigned int result = 0;
+    check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost),
+              "Reading described scene check");
+    if (result != 0) {
+        throw std::runtime_error("Described scene check failed (flags " + std::to_string(result) + ")");
+    }
+    description.primitives.clear();
+    const HiprtScene mesh_only(device, description);
+    if (mesh_only.scene().geometry || !mesh_only.scene().mesh) {
+        throw std::runtime_error("Mesh-only scene built incorrect geometry");
+    }
+    description.meshes.clear();
+    const HiprtScene room_only(device, description);
+    if (room_only.scene().geometry || room_only.scene().mesh) {
+        throw std::runtime_error("Room-only scene built incorrect geometry");
+    }
+    std::cout << "Scene description GPU checks passed.\n";
+}
+
 }
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 1 && argc != 4) {
-            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply]");
+        if (argc != 1 && argc != 4 && argc != 5) {
+            throw std::runtime_error("Usage: hiprt_tests [y-up.ply z-up.ply orientation.ply [scene.hipscene]]");
         }
         const SelectedDevice device = select_device();
         std::cout << "Testing on " << device.properties.name << " ("
@@ -688,13 +747,14 @@ int main(int argc, char** argv) {
         const auto context_buffer = allocate_device<unsigned int>(1, "Initializing HIP context");
         const HiprtScene scene(device.id);
         run_checks(scene.scene());
-        if (argc == 4) {
+        if (argc >= 4) {
             std::vector<float4> y_vertices, z_vertices;
             append_ply_mesh(y_vertices, argv[1], MeshUp::y);
             append_ply_mesh(z_vertices, argv[2], MeshUp::z);
             if (y_vertices.size() != 3 || z_vertices.size() != y_vertices.size()) {
                 throw std::runtime_error("PLY orientation produced incorrect vertex count");
             }
+            if (argc == 5) check_description(device.id, argv[4]);
             for (std::size_t index = 0; index < y_vertices.size(); ++index) {
                 const float4 y = y_vertices[index], z = z_vertices[index];
                 if (y.x != z.x || y.y != z.y || y.z != z.z) {

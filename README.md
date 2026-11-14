@@ -19,7 +19,12 @@ and BMP writing.
 
 - CMake 3.25 or newer
 - AMD HIP SDK 7.1, including HIP RT 3.0, its device bitcode and runtime bundles
+- Boost 1.92 or newer headers
 - A compatible AMD GPU
+
+On Windows, CMake defaults to `boost_1_92_0` in the user's Downloads directory.
+Set the `Boost_ROOT` CMake cache entry to use a different installation. The
+headers are found locally; CMake does not download them.
 
 On Windows, CMake finds the standard `C:\Program Files\AMD\ROCm\7.1`
 installation automatically. For a different installation, set
@@ -51,7 +56,8 @@ cmake -S . -B build "-DHIPCC_EXECUTABLE=C:\Program Files\AMD\ROCm\7.1\bin\hipcc.
 
 On Linux or WSL, use the same CMake commands with SDK 7.1 installed.
 
-The BMP is saved as `hiprt_demo.bmp` in the current directory. By default,
+The default scene is loaded from [scenes/classic.hipscene](scenes/classic.hipscene),
+not compiled into the renderer. The BMP is saved as `hiprt_demo.bmp` in the current directory. By default,
 adaptive sampling checks each pixel after batches of eight samples and stops
 when its estimated RGB sampling error is sufficiently low. It uses at least
 64 samples, or 256 for pixels that hit glass, metal or Phong materials on a
@@ -110,7 +116,7 @@ to `build\hiprt_demo.bmp`. Rendering does not run the tests.
 
 ### Detail scene
 
-Select the separate scene and supply a PLY mesh. For example, with the
+Select [scenes/detail.hipscene](scenes/detail.hipscene) and supply a PLY mesh. For example, with the
 Z-up Artec dragon downloaded separately:
 
 ```powershell
@@ -130,12 +136,66 @@ the classic scene, and large meshes need additional GPU memory and render time.
 The original scene remains the default and is also selectable with
 `--scene classic`.
 
+### Scene description files
+
+The host-side loader uses **Boost.Parser**, not Boost.Spirit. Named `bp::rule`
+definitions describe the grammar and produce typed attributes; a separate
+validation/conversion step resolves materials and constructs the render scene.
+Start the tracer
+with a scene file:
+
+```powershell
+.\build\bin\hiprt_demo.exe --scene .\scenes\classic.hipscene
+.\build\bin\hiprt_demo.exe preview.bmp 32 --scene .\scenes\detail.hipscene --fixed
+```
+
+`--scene classic` and `--scene detail` are aliases for the supplied files.
+The detail file refers to the separately downloaded dragon; edit its mesh path
+or use `--mesh` to override it. The built-in aliases locate the source-tree
+scene directory recorded by CMake, independently of the working directory.
+
+The versioned `hipscene 1` format follows [grammer.txt](grammer.txt); see
+[example.txt](example.txt) for a complete example. Sections and fields must appear
+in the documented order: image, sampling, camera, room, material definitions,
+one light, then objects. Arbitrary whitespace is allowed; comments are not
+part of version 1. Strings support `\"` and `\\` escapes.
+
+Scene files control:
+
+- Image dimensions and BMP output path.
+- Fixed or adaptive sampling, including batch size and convergence thresholds.
+  The maximum sample count caps both adaptive minima.
+- Camera position, target, and half-view height.
+- Room dimensions, wall colors, and the existing procedural surfaces.
+- Named diffuse, Phong, metal (with roughness), and glass materials.
+- One ceiling rectangle or emissive torus, including radiance and dimensions.
+- Any number of spheres, tilted tori, and independently fitted/materialed PLY meshes.
+  `cat` and `crystal` insert the original procedural models at their original positions.
+
+`tilt_x` is in degrees. Rectangle centers and sizes use X/Z coordinates and
+full extents; room sizes are also full extents, with the floor at Y=0.
+Mesh fitting is uniform, with `position` giving the horizontal center and the
+bottom Y coordinate after the optional Z-up rotation.
+
+Mesh file paths are relative to the **scene file's directory**. Output paths
+and command-line `--mesh` paths are relative to the working directory.
+Positional output/sample arguments and `--fixed` override the file's settings.
+`--mesh` replaces exactly one cat or PLY mesh; ambiguous replacements are errors,
+and `--mesh-up` still requires `--mesh`.
+
+Syntax and validation errors include the scene filename, line, and column.
+Invalid dimensions, non-finite numbers, duplicate material names, and unknown
+material references are rejected before GPU setup.
+
 ## Tests
 
 The separate GPU test executable checks adaptive sampling, mesh and custom-primitive intersections,
 room lighting, Phong sampling, reflection, glass refraction, and cat visibility
 without rendering an image. CTest additionally checks PLY parsing, imported
-mesh intersections and the detail scene's materials, procedural walls and floor, and torus lighting:
+mesh intersections and the detail scene's materials, procedural walls and floor, and torus lighting.
+CPU scene-loader tests cover both supplied scenes, parsing errors, validation,
+and relative paths. GPU scene-description checks exercise custom dimensions,
+primitive radii/tilts, multiple mesh transforms/materials, and empty geometry:
 
 ```powershell
 .\build\bin\hiprt_tests.exe

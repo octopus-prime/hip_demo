@@ -3,6 +3,7 @@
 #include <hip/hip_runtime.h>
 
 #include "hip_demo_architectures.h"
+#include "scene_description.h"
 
 #include <algorithm>
 #include <array>
@@ -54,8 +55,6 @@ constexpr float3 detail_torus_center{0.0f, 3.48f, -0.35f};
 constexpr float3 detail_camera_position{0.0f, 2.1f, 6.8f};
 constexpr float3 detail_camera_target{0.0f, 1.75f, 0.0f};
 constexpr unsigned int detail_object_count = 3;
-
-enum class MeshUp { y, z };
 
 struct SceneObject {
     float3 center;
@@ -167,14 +166,6 @@ struct Ray {
     float3 direction;
 };
 
-enum class Material : std::uint8_t {
-    diffuse,
-    metal,
-    glass,
-    phong,
-    emissive,
-};
-
 struct Hit {
     float distance;
     float3 point;
@@ -186,6 +177,16 @@ struct Hit {
     bool tiled_floor;
     unsigned int object_id;
 };
+
+__host__ __device__ float3 vector3(SceneVector value) {
+    return {value.x, value.y, value.z};
+}
+
+__device__ void set_material(Hit& hit, const SceneMaterial& material) {
+    hit.albedo = vector3(material.albedo);
+    hit.material = material.kind;
+    hit.roughness = material.roughness;
+}
 
 __device__ void set_face_normal(Hit& hit, const Ray& ray, float3 outward_normal) {
     hit.front_face = dot(ray.direction, outward_normal) < 0.0f;
@@ -345,6 +346,23 @@ __device__ bool hit_primitive(const Ray& ray, unsigned int object_id, float maxi
     return found;
 }
 
+__device__ bool hit_described_primitive(const Ray& ray, const ScenePrimitive& object,
+                                       float maximum_distance, Hit& hit) {
+    const float3 center = vector3(object.center);
+    if (object.sphere) {
+        return hit_sphere(ray, center, object.radius, maximum_distance, hit);
+    }
+    const Ray local_ray{
+        rotate_x(ray.origin - center, -object.tilt_sine, object.tilt_cosine),
+        rotate_x(ray.direction, -object.tilt_sine, object.tilt_cosine)};
+    if (!hit_torus(local_ray, {0, 0, 0}, maximum_distance, hit, object.major_radius, object.minor_radius)) {
+        return false;
+    }
+    hit.point = ray.origin + hit.distance * ray.direction;
+    hit.normal = rotate_x(hit.normal, object.tilt_sine, object.tilt_cosine);
+    return true;
+}
+
 constexpr float floor_tile_size = 0.75f;
 constexpr float floor_grout_half_width = 0.009f;
 constexpr float floor_bevel_width = 0.022f;
@@ -414,10 +432,11 @@ __device__ float3 wood_albedo(float3 point) {
     return (1.0f - tone) * float3{0.25f, 0.10f, 0.035f} + tone * float3{0.66f, 0.36f, 0.14f};
 }
 
-__device__ float3 fractal_wall_albedo(float3 point, bool julia) {
-    const float horizontal = (julia ? point.z : -point.z) / (2.0f * room_half_depth) + 0.5f;
+__device__ float3 fractal_wall_albedo(float3 point, bool julia, float depth = 2 * room_half_depth,
+                                     float height = room_height) {
+    const float horizontal = (julia ? point.z : -point.z) / depth + 0.5f;
     const float real = 3.5f * horizontal - (julia ? 1.75f : 2.25f);
-    const float imaginary = 0.7f * (point.y - room_height * 0.5f);
+    const float imaginary = 0.7f * (point.y - height * 0.5f);
     const float c_real = julia ? -0.8f : real;
     const float c_imaginary = julia ? 0.156f : imaginary;
     float x = julia ? real : 0.0f;
@@ -443,7 +462,11 @@ __device__ float3 fractal_wall_albedo(float3 point, bool julia) {
     return (1.0f - band) * dark + band * light;
 }
 
-__device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool detail = false) {
+__device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool detail = false,
+                         const SceneSettings* settings = nullptr) {
+    const float half_width = settings ? settings->room_size.x / 2 : room_half_width;
+    const float height = settings ? settings->room_size.y : room_height;
+    const float half_depth = settings ? settings->room_size.z / 2 : room_half_depth;
     bool found = false;
     for (int wall = 0; wall < 5; ++wall) {
         float origin, direction, position;
@@ -451,17 +474,17 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool 
         if (wall < 2) {
             origin = ray.origin.y;
             direction = ray.direction.y;
-            position = wall == 0 ? 0.0f : room_height;
+            position = wall == 0 ? 0.0f : height;
             normal = wall == 0 ? float3{0.0f, 1.0f, 0.0f} : float3{0.0f, -1.0f, 0.0f};
         } else if (wall == 2) {
             origin = ray.origin.z;
             direction = ray.direction.z;
-            position = -room_half_depth;
+            position = -half_depth;
             normal = {0.0f, 0.0f, 1.0f};
         } else {
             origin = ray.origin.x;
             direction = ray.direction.x;
-            position = wall == 3 ? -room_half_width : room_half_width;
+            position = wall == 3 ? -half_width : half_width;
             normal = wall == 3 ? float3{1.0f, 0.0f, 0.0f} : float3{-1.0f, 0.0f, 0.0f};
         }
         if (fabsf(direction) < 1.0e-6f) {
@@ -472,9 +495,9 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool 
             continue;
         }
         const float3 point = ray.origin + distance * ray.direction;
-        if (fabsf(point.x) > room_half_width + 0.0001f ||
-            point.y < -0.0001f || point.y > room_height + 0.0001f ||
-            fabsf(point.z) > room_half_depth + 0.0001f) {
+        if (fabsf(point.x) > half_width + 0.0001f ||
+            point.y < -0.0001f || point.y > height + 0.0001f ||
+            fabsf(point.z) > half_depth + 0.0001f) {
             continue;
         }
         maximum_distance = distance;
@@ -483,15 +506,25 @@ __device__ bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool 
         set_face_normal(hit, ray, normal);
         hit.albedo = wall == 3 ? float3{0.72f, 0.10f, 0.10f} :
             wall == 4 ? float3{0.10f, 0.65f, 0.16f} : float3{0.75f, 0.75f, 0.75f};
-        if (detail && wall == 0) {
+        const auto surface = settings ? settings->surfaces[wall].kind :
+            !detail ? SurfaceKind::color : wall == 0 ? SurfaceKind::tiles :
+            wall == 2 ? SurfaceKind::wood : wall == 3 ? SurfaceKind::mandelbrot :
+            wall == 4 ? SurfaceKind::julia : SurfaceKind::color;
+        if (settings) hit.albedo = vector3(settings->surfaces[wall].color);
+        if (surface == SurfaceKind::tiles) {
             apply_floor_tiles(hit, ray);
-        } else if (detail && wall == 2) {
+        } else if (surface == SurfaceKind::wood) {
             hit.albedo = wood_albedo(point);
-        } else if (detail && wall >= 3) {
-            hit.albedo = fractal_wall_albedo(point, wall == 4);
+        } else if (surface == SurfaceKind::mandelbrot || surface == SurfaceKind::julia) {
+            hit.albedo = fractal_wall_albedo(point, surface == SurfaceKind::julia, 2 * half_depth, height);
         }
-        hit.material = !detail && wall == 1 && fabsf(point.x) <= light_half_width &&
-            fabsf(point.z - light_center_z) <= light_half_depth ? Material::emissive : Material::diffuse;
+        const bool on_light = settings
+            ? !settings->light.torus &&
+              fabsf(point.x - settings->light.center.x) <= settings->light.width / 2 &&
+              fabsf(point.z - settings->light.center.z) <= settings->light.depth / 2
+            : !detail && fabsf(point.x) <= light_half_width &&
+              fabsf(point.z - light_center_z) <= light_half_depth;
+        hit.material = wall == 1 && on_light ? Material::emissive : Material::diffuse;
         hit.roughness = 1.0f;
         found = true;
     }
@@ -505,7 +538,7 @@ __device__ bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene scene) {
     bool found = hit_objects(ray, closest_hit, scene);
     const float closest_distance = found ? closest_hit.distance : 1.0e30f;
     Hit candidate{};
-    if (hit_room(ray, closest_distance, candidate, scene.detail)) {
+    if (hit_room(ray, closest_distance, candidate, scene.detail, scene.settings)) {
         closest_hit = candidate;
         found = true;
     }
@@ -522,15 +555,18 @@ struct LightSample {
     float area_weight;
 };
 
-__device__ LightSample sample_torus_light(Random& random) {
+__device__ LightSample sample_torus_light(Random& random, const SceneLight* light = nullptr) {
+    const float major = light ? light->major_radius : detail_torus_major_radius;
+    const float minor = light ? light->minor_radius : detail_torus_minor_radius;
+    const float3 center = light ? vector3(light->center) : detail_torus_center;
     const float around = 2.0f * pi * random.next();
     const float tube = 2.0f * pi * random.next();
-    const float radial = detail_torus_major_radius + detail_torus_minor_radius * cosf(tube);
+    const float radial = major + minor * cosf(tube);
     const float3 normal{cosf(tube) * cosf(around), sinf(tube), cosf(tube) * sinf(around)};
-    return {detail_torus_center + float3{radial * cosf(around),
-                                         detail_torus_minor_radius * sinf(tube),
+    return {center + float3{radial * cosf(around),
+                                         minor * sinf(tube),
                                          radial * sinf(around)},
-            normal, 4.0f * pi * pi * detail_torus_minor_radius * radial};
+            normal, 4.0f * pi * pi * minor * radial};
 }
 
 __device__ float3 sample_phong_lobe(float3 axis, Random& random) {
@@ -569,7 +605,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
         }
         if (hit.material == Material::emissive) {
             if (include_emission && hit.front_face) {
-                radiance = radiance + throughput * light_radiance(scene.detail);
+                radiance = radiance + throughput * vector3(scene.settings->light.radiance);
             }
             break;
         } else if (hit.material == Material::metal) {
@@ -598,13 +634,14 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
             }
         } else {
             LightSample light{};
-            if (scene.detail) {
-                light = sample_torus_light(random);
+            const auto& source = scene.settings->light;
+            if (source.torus) {
+                light = sample_torus_light(random, &source);
             } else {
-                light = {{(2.0f * random.next() - 1.0f) * light_half_width,
-                          room_height,
-                          light_center_z + (2.0f * random.next() - 1.0f) * light_half_depth},
-                         {0.0f, -1.0f, 0.0f}, 4.0f * light_half_width * light_half_depth};
+                light = {{source.center.x + (random.next() - 0.5f) * source.width,
+                          source.center.y,
+                          source.center.z + (random.next() - 0.5f) * source.depth},
+                         {0.0f, -1.0f, 0.0f}, source.width * source.depth};
             }
             const float3 shadow_origin = hit.point + geometric_normal * 0.002f;
             const float3 to_light = light.point - shadow_origin;
@@ -615,7 +652,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
             const float light_cosine = fmaxf(0.0f, dot(light.normal, -light_direction));
             Hit shadow_hit{};
             // The torus intersection is sphere-traced with a finite surface tolerance.
-            const float shadow_tolerance = scene.detail
+            const float shadow_tolerance = source.torus
                 ? fminf(0.02f, 0.0025f / fmaxf(light_cosine, 0.1f)) : 0.001f;
             if (cosine > 0.0f && light_cosine > 0.0f &&
                 (!hit.tiled_floor || dot(geometric_normal, light_direction) > 0.0f) &&
@@ -630,7 +667,7 @@ __device__ float3 trace(Ray ray, Random& random, TraceScene scene, bool* specula
                     scattering = 0.5f * (scattering + float3{1.0f, 1.0f, 1.0f} *
                         (phong_specular_reflectance * cosine * lobe));
                 }
-                radiance = radiance + throughput * scattering * light_radiance(scene.detail) *
+                radiance = radiance + throughput * scattering * vector3(source.radiance) *
                     (light_cosine * light.area_weight / distance_squared);
             }
             include_emission = false;
@@ -679,17 +716,20 @@ __device__ void add_adaptive_sample(AdaptivePixel& pixel, float3 value) {
     pixel.m2 = pixel.m2 + delta * (value - pixel.mean);
 }
 
-__device__ bool adaptive_converged(const AdaptivePixel& pixel) {
-    const unsigned int minimum = pixel.specular ? adaptive_specular_min_samples : adaptive_min_samples;
-    if (pixel.count < minimum) {
+__device__ bool adaptive_converged(const AdaptivePixel& pixel, const SceneSampling* sampling = nullptr) {
+    const unsigned int minimum = sampling ? (pixel.specular ? sampling->specular_minimum : sampling->minimum) :
+        (pixel.specular ? adaptive_specular_min_samples : adaptive_min_samples);
+    if (pixel.count < minimum || pixel.count < 2) {
         return false;
     }
     const float n = static_cast<float>(pixel.count);
-    const float3 scale{fmaxf(adaptive_brightness_floor, fabsf(pixel.mean.x)),
-                       fmaxf(adaptive_brightness_floor, fabsf(pixel.mean.y)),
-                       fmaxf(adaptive_brightness_floor, fabsf(pixel.mean.z))};
+    const float floor = sampling ? sampling->brightness_floor : adaptive_brightness_floor;
+    const float error = sampling ? sampling->relative_error : adaptive_relative_error;
+    const float3 scale{fmaxf(floor, fabsf(pixel.mean.x)),
+                       fmaxf(floor, fabsf(pixel.mean.y)),
+                       fmaxf(floor, fabsf(pixel.mean.z))};
     // Welford's M2 gives the squared standard error as M2 / (n * (n - 1)).
-    const float multiplier = n * (n - 1.0f) * adaptive_relative_error * adaptive_relative_error;
+    const float multiplier = n * (n - 1.0f) * error * error;
     return isfinite(pixel.m2.x) && isfinite(pixel.m2.y) && isfinite(pixel.m2.z) &&
         pixel.m2.x <= multiplier * scale.x * scale.x &&
         pixel.m2.y <= multiplier * scale.y * scale.y &&
@@ -705,8 +745,8 @@ __device__ std::uint32_t encode_color(float3 color) {
 
 __device__ float3 sample_pixel(int x, int y, int width, int height, int sample, float3 forward, float3 right,
                                float3 up, TraceScene scene, bool* specular_primary = nullptr) {
-    const float half_view_height = scene.detail ? 0.35f : 0.41421356f;
-    constexpr float aspect_ratio = static_cast<float>(image_width) / image_height;
+    const float half_view_height = scene.settings->half_view_height;
+    const float aspect_ratio = static_cast<float>(width) / height;
     const std::uint32_t seed = static_cast<std::uint32_t>(
         (x + y * width + 1) * 747796405u + (sample + 1) * 2891336453u);
     Random random{seed == 0 ? 1u : seed};
@@ -715,7 +755,7 @@ __device__ float3 sample_pixel(int x, int y, int width, int height, int sample, 
     const float v = (1.0f - 2.0f * (static_cast<float>(y) + random.next()) / height) *
         half_view_height;
     const float3 direction = normalize(forward + u * right + v * up);
-    return trace({scene.detail ? detail_camera_position : camera_position, direction}, random, scene, specular_primary);
+    return trace({vector3(scene.settings->camera_position), direction}, random, scene, specular_primary);
 }
 
 __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene scene, int width, int height,
@@ -726,8 +766,7 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
         return;
     }
 
-    const float3 forward = normalize(scene.detail ? detail_camera_target - detail_camera_position
-                                                  : camera_target - camera_position);
+    const float3 forward = normalize(vector3(scene.settings->camera_target) - vector3(scene.settings->camera_position));
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
     const int pixel_index = x + y * width;
@@ -756,15 +795,14 @@ __global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* sta
     if (pixel.done) {
         return;
     }
-    const float3 forward = normalize(scene.detail ? detail_camera_target - detail_camera_position
-                                                  : camera_target - camera_position);
+    const float3 forward = normalize(vector3(scene.settings->camera_target) - vector3(scene.settings->camera_position));
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
     for (int sample = first_sample; sample < sample_end; ++sample) {
         add_adaptive_sample(pixel, sample_pixel(x, y, width, height, sample, forward, right, up, scene,
                                                 &pixel.specular));
     }
-    pixel.done = sample_end == sample_count || adaptive_converged(pixel);
+    pixel.done = sample_end == sample_count || adaptive_converged(pixel, &scene.settings->sampling);
     if (pixel.done) {
         pixels[pixel_index] = encode_color(pixel.sum / static_cast<float>(pixel.count));
     }
@@ -916,13 +954,17 @@ SelectedDevice select_device() {
 }
 
 template <typename SceneOwner>
-void render_image(const std::string& output_path, int sample_count, bool adaptive, const std::string& ply_path,
-                  MeshUp mesh_up, bool detail) {
+void render_image(const SceneDescription& description) {
+    const auto& output_path = description.output;
+    const int image_width = description.width;
+    const int image_height = description.height;
+    const int sample_count = description.settings.sampling.maximum;
+    const bool adaptive = description.settings.sampling.adaptive;
     const SelectedDevice device = select_device();
     std::cout << "Rendering on " << device.properties.name << " ("
               << device.properties.gcnArchName << ")...\n";
-    std::cout << "Scene: " << (detail ? "detail (2 spheres, torus light, mesh)" :
-                                             "classic (4 spheres, 3 tori)") << "; "
+    std::cout << "Scene: " << description.primitives.size() << " primitives, "
+              << description.meshes.size() << " meshes; "
               << (adaptive ? "up to " : "")
               << sample_count << " samples per pixel (" << (adaptive ? "adaptive" : "fixed") << ").\n";
 
@@ -954,7 +996,7 @@ void render_image(const std::string& output_path, int sample_count, bool adaptiv
         device_sums.reset(sums_allocation);
     }
 
-    SceneOwner scene_owner(device.id, ply_path, mesh_up, detail);
+    SceneOwner scene_owner(device.id, description);
     const TraceScene scene = scene_owner.scene();
 
     const dim3 block_size{16, 16};
@@ -966,7 +1008,7 @@ void render_image(const std::string& output_path, int sample_count, bool adaptiv
     HipEvent stop;
     check_hip(hipEventRecord(start.value, nullptr), "Starting GPU render timer");
     for (int first_sample = 0; first_sample < sample_count;) {
-        const int sample_end = first_sample + std::min(samples_per_batch, sample_count - first_sample);
+        const int sample_end = first_sample + std::min(description.settings.sampling.batch, sample_count - first_sample);
         if (adaptive) {
             hipLaunchKernelGGL(render_adaptive_kernel, grid_size, block_size, 0, 0, device_pixels.get(),
                                adaptive_states.get(), scene, image_width, image_height,
@@ -1009,7 +1051,7 @@ void render_image(const std::string& output_path, int sample_count, bool adaptiv
     if (!image) {
         throw std::runtime_error("Could not open output image: " + output_path);
     }
-    constexpr std::uint32_t row_size = (image_width * 3 + 3) & ~3u;
+    const std::uint32_t row_size = (static_cast<std::uint32_t>(image_width) * 3 + 3) & ~3u;
     constexpr std::uint32_t header_size = 54;
     std::array<unsigned char, header_size> header{};
     const auto write_header_value = [&header](std::size_t offset, std::uint32_t value, int bytes) {
@@ -1052,32 +1094,34 @@ void render_image(const std::string& output_path, int sample_count, bool adaptiv
 }
 
 template <typename SceneOwner>
-int run_demo(int argc, char** argv, const char* default_output_path) {
+int run_demo(int argc, char** argv) {
     try {
-        std::string output_path = default_output_path;
+        std::string output_path;
         int sample_count = samples_per_pixel;
         bool adaptive = true;
         std::string ply_path;
         MeshUp mesh_up = MeshUp::y;
         bool mesh_up_specified = false;
-        bool detail = false;
         bool scene_specified = false;
+        std::string scene_path = builtin_scene_path(false);
+        bool fixed_specified = false;
         int positional_count = 0;
         for (int index = 1; index < argc; ++index) {
             const std::string_view input(argv[index]);
             if (input == "--fixed") {
                 adaptive = false;
+                fixed_specified = true;
             } else if (input == "--scene") {
                 if (scene_specified || index + 1 >= argc) {
-                    throw std::runtime_error("--scene requires one name: classic or detail.");
+                    throw std::runtime_error("--scene requires one scene file or preset name.");
                 }
                 const std::string_view name(argv[++index]);
                 if (name == "classic") {
-                    detail = false;
+                    scene_path = builtin_scene_path(false);
                 } else if (name == "detail") {
-                    detail = true;
+                    scene_path = builtin_scene_path(true);
                 } else {
-                    throw std::runtime_error("--scene requires one name: classic or detail.");
+                    scene_path = name;
                 }
                 scene_specified = true;
             } else if (input == "--mesh") {
@@ -1113,17 +1157,19 @@ int run_demo(int argc, char** argv, const char* default_output_path) {
                 ++positional_count;
             } else {
                 throw std::runtime_error(
-                    "Usage: renderer [output.bmp] [samples-per-pixel] [--fixed] [--scene classic|detail] "
+                    "Usage: renderer [output.bmp] [samples-per-pixel] [--fixed] [--scene file|classic|detail] "
                     "[--mesh file.ply] [--mesh-up y|z]");
             }
         }
         if (mesh_up_specified && ply_path.empty()) {
             throw std::runtime_error("--mesh-up requires --mesh.");
         }
-        if (detail && ply_path.empty()) {
-            throw std::runtime_error("The detail scene requires --mesh with a PLY file.");
-        }
-        render_image<SceneOwner>(output_path, sample_count, adaptive, ply_path, mesh_up, detail);
+        auto description = load_scene_description(scene_path);
+        if (!output_path.empty()) description.output = output_path;
+        if (positional_count > 1) description.settings.sampling.maximum = sample_count;
+        if (fixed_specified) description.settings.sampling.adaptive = adaptive;
+        if (!ply_path.empty()) override_scene_mesh(description, ply_path, mesh_up);
+        render_image<SceneOwner>(description);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "HIP RT demo failed: " << error.what() << '\n';

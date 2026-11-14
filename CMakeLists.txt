@@ -8,6 +8,16 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(WIN32)
+    set(Boost_ROOT "$ENV{USERPROFILE}\\Downloads\\boost_1_92_0" CACHE PATH "Boost root directory")
+endif()
+cmake_policy(PUSH)
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 OLD)
+endif()
+find_package(Boost 1.92 REQUIRED)
+cmake_policy(POP)
+
 find_program(
     HIPCC_EXECUTABLE
     NAMES hipcc hipcc.bat
@@ -194,8 +204,13 @@ add_library(rply STATIC third_party/rply/rply.c)
 target_include_directories(rply PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply")
 add_library(ply_mesh STATIC src/ply_mesh.cpp)
 target_link_libraries(ply_mesh PRIVATE rply)
+add_library(scene_description STATIC src/scene_description.cpp)
+target_link_libraries(scene_description PRIVATE Boost::headers)
+target_compile_definitions(scene_description PRIVATE
+    NOMINMAX
+    HIP_DEMO_SCENE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
 if(MSVC)
-    set_property(TARGET rply ply_mesh PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    set_property(TARGET rply ply_mesh scene_description PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
 function(add_hiprt_executable target)
@@ -207,10 +222,12 @@ function(add_hiprt_executable target)
         COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS}
             -fgpu-rdc "${source}"
             -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
-            "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>" ${HIPRT_LINK_OPTIONS}
+            "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
+            "$<TARGET_FILE:scene_description>" ${HIPRT_LINK_OPTIONS}
             -o "${output}"
         DEPENDS "${source}" "${HIPRT_SCENE_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/ply_mesh.h" ply_mesh rply
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/ply_mesh.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/scene_description.h" ply_mesh rply scene_description
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
@@ -231,7 +248,8 @@ add_test(NAME hiprt_tests
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_ascii.ply"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_z_up.ply"
-        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply")
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
 set_tests_properties(hiprt_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 add_executable(ply_loader_tests tests/ply_loader_tests.cpp)
 target_include_directories(ply_loader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -240,6 +258,15 @@ if(MSVC)
     set_property(TARGET ply_loader_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 add_test(NAME ply_loader_tests COMMAND ply_loader_tests "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+add_executable(scene_description_tests tests/scene_description_tests.cpp)
+target_include_directories(scene_description_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(scene_description_tests PRIVATE scene_description)
+if(MSVC)
+    set_property(TARGET scene_description_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+add_test(NAME scene_description_tests COMMAND scene_description_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene"
+    "${CMAKE_CURRENT_SOURCE_DIR}/example.txt")
 add_custom_target(
     run
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"

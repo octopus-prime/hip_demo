@@ -5,8 +5,19 @@
 #include <hiprt/hiprt_device.h>
 
 #include "ply_mesh.h"
+#include "scene_description.h"
 
 namespace {
+struct TriangleMaterial {
+    SceneMaterial material;
+    unsigned int object_id;
+};
+
+struct PrimitiveData {
+    const ScenePrimitive* objects;
+    unsigned int count;
+};
+
 struct TraceScene {
     hiprtGeometry geometry;
     hiprtFuncTable functions;
@@ -15,6 +26,9 @@ struct TraceScene {
     unsigned int mesh_triangle_count;
     unsigned int cat_detail_start;
     bool detail;
+    const SceneSettings* settings;
+    const ScenePrimitive* primitives;
+    const TriangleMaterial* triangle_materials;
 };
 }
 
@@ -23,13 +37,12 @@ struct TraceScene {
 // The linked HIP RT device library calls these global dispatch functions.
 __device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, const hiprtFuncTableHeader& table,
                               const hiprtRay& ray, void*, hiprtHit& result) {
-    const auto* detail_flag = static_cast<const unsigned int*>(
+    const auto* data = static_cast<const PrimitiveData*>(
         table.funcDataSets[geom_type * table.numRayTypes + ray_type].intersectFuncData);
-    const bool detail = detail_flag && *detail_flag != 0;
     const Ray scene_ray{ray.origin, ray.direction};
     Hit hit{};
-    if (result.primID >= (detail ? detail_object_count : scene_object_count) ||
-        !hit_primitive(scene_ray, result.primID, ray.maxT, hit, detail) ||
+    if (result.primID >= data->count ||
+        !hit_described_primitive(scene_ray, data->objects[result.primID], ray.maxT, hit) ||
         hit.distance < ray.minT) {
         return false;
     }
@@ -56,6 +69,7 @@ constexpr std::array<uint3, 8> mesh_triangles{{
 constexpr float3 cat_position{1.85f, 0.0f, 1.75f};
 
 __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
+    if (!scene.geometry) return false;
     bool found = false;
     float closest_distance = 1.0e30f;
     Hit candidate{};
@@ -73,7 +87,7 @@ __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene 
         candidate.point = ray.origin + result.t * ray.direction;
         set_face_normal(candidate, ray, result.normal);
         candidate.object_id = result.primID;
-        set_object_material(candidate, result.primID, scene.detail);
+        set_material(candidate, scene.primitives[result.primID].material);
         closest_hit = candidate;
         found = true;
     }
@@ -82,6 +96,7 @@ __device__ bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene 
 
 __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
     bool found = hit_custom_objects(ray, closest_hit, scene);
+    if (!scene.mesh) return found;
     hiprtRay traversal_ray{};
     traversal_ray.origin = ray.origin;
     traversal_ray.direction = ray.direction;
@@ -93,23 +108,9 @@ __device__ bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) 
         closest_hit.distance = result.t;
         closest_hit.point = ray.origin + result.t * ray.direction;
         set_face_normal(closest_hit, ray, normalize(result.normal));
-        if (scene.detail) {
-            closest_hit.object_id = scene_object_count + 1;
-            closest_hit.albedo = {0.18f, 0.38f, 0.68f};
-            closest_hit.material = Material::phong;
-            closest_hit.roughness = 0.0f;
-        } else if (result.primID < mesh_triangles.size()) {
-            closest_hit.object_id = scene_object_count;
-            closest_hit.albedo = {0.10f, 0.65f, 0.72f};
-            closest_hit.material = Material::phong;
-            closest_hit.roughness = 0.0f;
-        } else {
-            closest_hit.object_id = scene_object_count + 1;
-            const bool detail = result.primID >= scene.cat_detail_start;
-            closest_hit.albedo = detail ? float3{0.025f, 0.018f, 0.012f} : float3{0.78f, 0.36f, 0.16f};
-            closest_hit.material = Material::diffuse;
-            closest_hit.roughness = 1.0f;
-        }
+        const auto& triangle = scene.triangle_materials[result.primID];
+        closest_hit.object_id = triangle.object_id;
+        set_material(closest_hit, triangle.material);
         found = true;
     }
     return found;
@@ -134,7 +135,8 @@ void append_triangle(std::vector<float4>& vertices, float3 a, float3 b, float3 c
     vertices.push_back({c.x, c.y, c.z, 0.0f});
 }
 
-void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, MeshUp mesh_up, bool detail = false) {
+void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, MeshUp mesh_up,
+                     SceneVector fit, SceneVector position) {
     const PlyMesh mesh = load_ply_mesh(path);
     const auto orient = [mesh_up](const std::array<float, 3>& point) {
         return mesh_up == MeshUp::z
@@ -154,9 +156,7 @@ void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, Mes
             }
         }
     }
-    const std::array<double, 3> available = detail ? std::array<double, 3>{1.85, 2.45, 1.55}
-                                                   : std::array<double, 3>{1.05, 1.55, 0.9};
-    const float3 position = detail ? float3{0.0f, 0.0f, -0.65f} : cat_position;
+    const std::array<double, 3> available{fit.x, fit.y, fit.z};
     double scale = std::numeric_limits<double>::infinity();
     for (std::size_t axis = 0; axis < 3; ++axis) {
         const double extent = maximum[axis] - minimum[axis];
@@ -173,13 +173,19 @@ void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, Mes
             const auto point = orient(mesh.vertices[index]);
             vertices.push_back({
                 static_cast<float>(position.x + (point[0] - (minimum[0] + maximum[0]) * 0.5) * scale),
-                static_cast<float>(0.02 + (point[1] - minimum[1]) * scale),
+                static_cast<float>(position.y + (point[1] - minimum[1]) * scale),
                 static_cast<float>(position.z + (point[2] - (minimum[2] + maximum[2]) * 0.5) * scale),
                 0.0f});
         }
     }
     std::cout << "Loaded PLY mesh: " << path << " (" << mesh.vertices.size() << " vertices, "
               << mesh.triangles.size() << " triangles).\n";
+}
+
+void append_ply_mesh(std::vector<float4>& vertices, const std::string& path, MeshUp mesh_up, bool detail = false) {
+    append_ply_mesh(vertices, path, mesh_up,
+                    detail ? SceneVector{1.85f, 2.45f, 1.55f} : SceneVector{1.05f, 1.55f, 0.9f},
+                    detail ? SceneVector{0, 0.02f, -0.65f} : SceneVector{1.85f, 0.02f, 1.75f});
 }
 
 void append_ellipsoid(std::vector<float4>& vertices, float3 center, float3 radius) {
@@ -299,13 +305,20 @@ struct HiprtFunctionTableOwner {
     }
 };
 
+SceneDescription preset_description(const std::string& path, MeshUp up, bool detail) {
+    auto description = load_scene_description(builtin_scene_path(detail));
+    if (!path.empty()) override_scene_mesh(description, path, up);
+    return description;
+}
+
 class HiprtScene {
 public:
     explicit HiprtScene(int device, const std::string& ply_path = {}, MeshUp mesh_up = MeshUp::y,
-                        bool detail = false) : detail_(detail) {
-        if (detail && ply_path.empty()) {
-            throw std::runtime_error("The detail scene requires a PLY mesh.");
-        }
+                        bool detail = false)
+        : HiprtScene(device, preset_description(ply_path, mesh_up, detail)) {}
+
+    HiprtScene(int device, const SceneDescription& description)
+        : detail_(description.settings.light.torus) {
         hipCtx_t hip_context = nullptr;
         check_hip(hipCtxGetCurrent(&hip_context), "Reading the current HIP context");
         if (!hip_context) {
@@ -318,85 +331,113 @@ public:
         check_hiprt(hiprtCreateContext(HIPRT_API_VERSION, context_input, context_.value),
                     "Creating the HIP RT context");
 
-        // Keep the sphere-traced torus tolerance inside the traversal bounds.
+        settings_ = allocate_device<SceneSettings>(1, "Allocating scene settings");
+        check_hip(hipMemcpy(settings_.get(), &description.settings, sizeof(SceneSettings), hipMemcpyHostToDevice),
+                  "Uploading scene settings");
+
         constexpr float margin = 0.01f;
-        std::array<float3, scene_object_count * 2> bounds{};
-        const unsigned int object_count = detail ? detail_object_count : scene_object_count;
+        const auto object_count = static_cast<unsigned int>(description.primitives.size());
+        std::vector<float3> bounds(object_count * 2);
         for (unsigned int index = 0; index < object_count; ++index) {
-            const SceneObject object = scene_object(index, detail);
-            const float sphere_size = detail ? detail_sphere_radius : sphere_radius;
-            const float major = detail ? detail_torus_major_radius : torus_major_radius;
-            const float minor = detail ? detail_torus_minor_radius : torus_minor_radius;
+            const auto& object = description.primitives[index];
+            const float sphere_size = object.radius;
+            const float major = object.major_radius;
+            const float minor = object.minor_radius;
             const float width = (object.sphere ? sphere_size : major + minor) + margin;
             const float absolute_sine = std::abs(object.tilt_sine);
             const float height = (object.sphere ? sphere_size : minor + major * absolute_sine) + margin;
-            const float depth = (object.sphere ? sphere_size : minor + major * object.tilt_cosine) + margin;
+            const float depth = (object.sphere ? sphere_size : minor + major * std::abs(object.tilt_cosine)) + margin;
             bounds[index * 2] = {object.center.x - width, object.center.y - height, object.center.z - depth};
             bounds[index * 2 + 1] = {object.center.x + width, object.center.y + height, object.center.z + depth};
         }
-        bounds_ = allocate_device<float3>(bounds.size(), "Allocating HIP RT bounding boxes");
-        check_hip(hipMemcpy(bounds_.get(), bounds.data(), sizeof(bounds), hipMemcpyHostToDevice),
-                  "Uploading HIP RT bounding boxes");
+        if (object_count != 0) {
+            primitives_ = allocate_device<ScenePrimitive>(object_count, "Allocating scene primitives");
+            check_hip(hipMemcpy(primitives_.get(), description.primitives.data(),
+                                object_count * sizeof(ScenePrimitive), hipMemcpyHostToDevice),
+                      "Uploading scene primitives");
+            bounds_ = allocate_device<float3>(bounds.size(), "Allocating HIP RT bounding boxes");
+            check_hip(hipMemcpy(bounds_.get(), bounds.data(), bounds.size() * sizeof(float3),
+                                hipMemcpyHostToDevice),
+                      "Uploading HIP RT bounding boxes");
 
-        hiprtGeometryBuildInput input{};
-        input.type = hiprtPrimitiveTypeAABBList;
-        input.geomType = 0;
-        input.primitive.aabbList.aabbs = bounds_.get();
-        input.primitive.aabbList.aabbCount = object_count;
-        input.primitive.aabbList.aabbStride = 2 * sizeof(float3);
-        const hiprtBuildOptions options{};
-        std::size_t temporary_size = 0;
-        check_hiprt(hiprtGetGeometryBuildTemporaryBufferSize(context_.value, input, options, temporary_size),
-                    "Querying HIP RT build memory");
-        std::unique_ptr<std::uint8_t, HipBufferDeleter> temporary;
-        if (temporary_size != 0) {
-            temporary = allocate_device<std::uint8_t>(temporary_size, "Allocating HIP RT build memory");
-        }
-        geometry_.context = context_.value;
-        check_hiprt(hiprtCreateGeometry(context_.value, input, options, geometry_.value),
-                    "Creating HIP RT geometry");
-        check_hiprt(hiprtBuildGeometry(context_.value, hiprtBuildOperationBuild, input, options,
-                                      temporary.get(), nullptr, geometry_.value),
-                    "Building HIP RT geometry");
-        check_hip(hipDeviceSynchronize(), "Waiting for HIP RT geometry");
+            hiprtGeometryBuildInput input{};
+            input.type = hiprtPrimitiveTypeAABBList;
+            input.geomType = 0;
+            input.primitive.aabbList.aabbs = bounds_.get();
+            input.primitive.aabbList.aabbCount = object_count;
+            input.primitive.aabbList.aabbStride = 2 * sizeof(float3);
+            const hiprtBuildOptions options{};
+            std::size_t temporary_size = 0;
+            check_hiprt(
+                hiprtGetGeometryBuildTemporaryBufferSize(context_.value, input, options, temporary_size),
+                "Querying HIP RT build memory");
+            std::unique_ptr<std::uint8_t, HipBufferDeleter> temporary;
+            if (temporary_size != 0) {
+                temporary = allocate_device<std::uint8_t>(temporary_size, "Allocating HIP RT build memory");
+            }
+            geometry_.context = context_.value;
+            check_hiprt(hiprtCreateGeometry(context_.value, input, options, geometry_.value),
+                        "Creating HIP RT geometry");
+            check_hiprt(hiprtBuildGeometry(context_.value, hiprtBuildOperationBuild, input, options,
+                                           temporary.get(), nullptr, geometry_.value),
+                        "Building HIP RT geometry");
+            check_hip(hipDeviceSynchronize(), "Waiting for HIP RT geometry");
 
-        functions_.context = context_.value;
-        check_hiprt(hiprtCreateFuncTable(context_.value, 1, 1, functions_.value),
-                    "Creating HIP RT function table");
-        hiprtFuncDataSet function_data{};
-        if (detail) {
-            detail_flag_ = allocate_device<unsigned int>(1, "Allocating detail scene flag");
-            const unsigned int flag = 1;
-            check_hip(hipMemcpy(detail_flag_.get(), &flag, sizeof(flag), hipMemcpyHostToDevice),
-                      "Uploading detail scene flag");
-            function_data.intersectFuncData = detail_flag_.get();
+            functions_.context = context_.value;
+            check_hiprt(hiprtCreateFuncTable(context_.value, 1, 1, functions_.value),
+                        "Creating HIP RT function table");
+            hiprtFuncDataSet function_data{};
+            primitive_data_ = allocate_device<PrimitiveData>(1, "Allocating primitive dispatch data");
+            const PrimitiveData data{primitives_.get(), object_count};
+            check_hip(hipMemcpy(primitive_data_.get(), &data, sizeof(data), hipMemcpyHostToDevice),
+                      "Uploading primitive dispatch data");
+            function_data.intersectFuncData = primitive_data_.get();
+            check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, function_data),
+                        "Initializing HIP RT function table");
         }
-        check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, function_data),
-                    "Initializing HIP RT function table");
 
         std::vector<float4> vertices;
-        if (!detail) {
-            for (const uint3 triangle : mesh_triangles) {
-                append_triangle(vertices, mesh_points[triangle.x], mesh_points[triangle.y], mesh_points[triangle.z]);
+        std::vector<TriangleMaterial> triangle_materials;
+        unsigned int mesh_id = object_count;
+        for (const auto& mesh : description.meshes) {
+            SceneMaterial material = mesh.material;
+            if (mesh.kind == SceneMeshKind::crystal) {
+                for (const uint3 triangle : mesh_triangles) {
+                    append_triangle(vertices, mesh_points[triangle.x], mesh_points[triangle.y],
+                                    mesh_points[triangle.z]);
+                }
+                material = {{0.10f, 0.65f, 0.72f}, Material::phong, 0};
+            } else if (mesh.kind == SceneMeshKind::cat) {
+                append_ellipsoid(vertices, cat_point(0.0f, 0.57f, 0.0f), {0.34f, 0.56f, 0.28f});
+                append_ellipsoid(vertices, cat_point(0.0f, 1.20f, 0.0f), {0.31f, 0.31f, 0.26f});
+                append_ear(vertices, -1.0f);
+                append_ear(vertices, 1.0f);
+                append_tail(vertices);
+                cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
+                material = {{0.78f, 0.36f, 0.16f}, Material::diffuse, 1};
+                triangle_materials.resize(cat_detail_start_, {material, mesh_id});
+                append_ellipsoid(vertices, cat_point(-0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
+                append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
+                append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
+                material = {{0.025f, 0.018f, 0.012f}, Material::diffuse, 1};
+            } else {
+                append_ply_mesh(vertices, mesh.file, mesh.up, mesh.fit, mesh.position);
+                cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
             }
-        }
-        if (ply_path.empty()) {
-            append_ellipsoid(vertices, cat_point(0.0f, 0.57f, 0.0f), {0.34f, 0.56f, 0.28f});
-            append_ellipsoid(vertices, cat_point(0.0f, 1.20f, 0.0f), {0.31f, 0.31f, 0.26f});
-            append_ear(vertices, -1.0f);
-            append_ear(vertices, 1.0f);
-            append_tail(vertices);
-            cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
-            append_ellipsoid(vertices, cat_point(-0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
-            append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
-            append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
-        } else {
-            append_ply_mesh(vertices, ply_path, mesh_up, detail);
-            cat_detail_start_ = static_cast<unsigned int>(vertices.size() / 3);
+            triangle_materials.resize(vertices.size() / 3, {material, mesh_id++});
         }
         mesh_triangle_count_ = static_cast<unsigned int>(vertices.size() / 3);
+        if (vertices.empty()) {
+            return;
+        }
+        triangle_materials_ =
+            allocate_device<TriangleMaterial>(triangle_materials.size(), "Allocating triangle materials");
+        check_hip(hipMemcpy(triangle_materials_.get(), triangle_materials.data(),
+                            triangle_materials.size() * sizeof(TriangleMaterial), hipMemcpyHostToDevice),
+                  "Uploading triangle materials");
         mesh_vertices_ = allocate_device<float4>(vertices.size(), "Allocating mesh vertices");
-        check_hip(hipMemcpy(mesh_vertices_.get(), vertices.data(), vertices.size() * sizeof(float4), hipMemcpyHostToDevice),
+        check_hip(hipMemcpy(mesh_vertices_.get(), vertices.data(), vertices.size() * sizeof(float4),
+                            hipMemcpyHostToDevice),
                   "Uploading mesh vertices");
         hiprtGeometryBuildInput mesh_input{};
         mesh_input.type = hiprtPrimitiveTypeTriangleMesh;
@@ -425,16 +466,20 @@ public:
 
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
-                mesh_triangle_count_, cat_detail_start_, detail_};
+                mesh_triangle_count_, cat_detail_start_, detail_, settings_.get(),
+                primitives_.get(), triangle_materials_.get()};
     }
 
 private:
     HiprtContextOwner context_;
+    std::unique_ptr<SceneSettings, HipBufferDeleter> settings_;
+    std::unique_ptr<ScenePrimitive, HipBufferDeleter> primitives_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;
     HiprtGeometryOwner geometry_;
-    std::unique_ptr<unsigned int, HipBufferDeleter> detail_flag_;
+    std::unique_ptr<PrimitiveData, HipBufferDeleter> primitive_data_;
     HiprtFunctionTableOwner functions_;
     std::unique_ptr<float4, HipBufferDeleter> mesh_vertices_;
+    std::unique_ptr<TriangleMaterial, HipBufferDeleter> triangle_materials_;
     HiprtGeometryOwner mesh_;
     unsigned int mesh_triangle_count_ = 0;
     unsigned int cat_detail_start_ = 0;
