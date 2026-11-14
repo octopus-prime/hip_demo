@@ -344,7 +344,11 @@ public:
     HiprtScene(int device, const SceneDescription& description)
         : detail_(description.settings.light.torus) {
         hipCtx_t hip_context = nullptr;
+        // HIP RT 3.0 requires this handle; HIP 7.1 has no non-deprecated context getter.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         check_hip(hipCtxGetCurrent(&hip_context), "Reading the current HIP context");
+#pragma clang diagnostic pop
         if (!hip_context) {
             throw std::runtime_error("No current HIP context is available for HIP RT.");
         }

@@ -93,6 +93,10 @@ endif()
 list(REMOVE_DUPLICATES HIP_DEMO_ARCHITECTURES)
 
 set(HIPCC_ARGUMENTS --std=c++23 -O3)
+if(WIN32)
+    # The SDK bitcode's host stub targets an older MSVC version, with the same Windows ABI.
+    list(APPEND HIPCC_ARGUMENTS -Xarch_host -Wno-override-module)
+endif()
 foreach(architecture IN LISTS HIP_DEMO_ARCHITECTURES)
     if(NOT architecture MATCHES "^gfx[0-9a-z]+(:[a-z0-9_+-]+)*$")
         message(FATAL_ERROR "Invalid HIP architecture: ${architecture}")

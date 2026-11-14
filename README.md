@@ -37,6 +37,11 @@ installation automatically. For a different installation, set
 `HIPCC_EXECUTABLE` to the SDK 7.1 compiler when configuring. A different
 version of HIP or HIP RT is rejected.
 
+Two SDK compatibility diagnostics are narrowly exempted: HIP RT 3.0 needs the
+deprecated HIP context getter (suppressed only at that call), and its bundled
+Windows host bitcode records an older MSVC target version (`override-module`
+is disabled only for host compilation). Other compiler diagnostics remain enabled.
+
 CMake detects installed GPU architectures using the SDK's `amdgpu-arch`.
 To target a specific GPU or build on a machine without one, set
 `HIP_ARCHITECTURE` explicitly (for example, `gfx1201` for the Radeon RX 9070 XT);
