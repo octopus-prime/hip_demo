@@ -1,365 +1,329 @@
 # HIP RT Demo
 
-A C++23 GPU path tracer rendering a Cornell-style box with red and green walls,
-a ceiling area light, four spheres, three tilted tori, a faceted crystal, and
-a copper-colored low-poly cat. A separate detail scene has a luminous torus,
-mirror and glass spheres, and an imported mesh.
-HIP RT traverses custom bounding-box primitives for spheres, tori and extruded text, and
-native triangles for the meshes. The room is intersected directly.
-The polished sphere next to the crystal reflects it like a mirror, while a
-separate glass sphere shows transparency and refraction.
+A command-line GPU path tracer for AMD GPUs. It renders scenes with spheres,
+tori, PLY meshes and extruded text, with reflections, glass, glossy materials
+and procedural wall textures. Images are saved as **PNG or BMP**.
 
-The renderer produces UHD 4K BMP or PNG images (3840 x 2160) with up to 1024 samples
-per pixel by default. It uses HIP `float3`, direct area-light sampling, indirect
-bounces, and metal, glass, diffuse, and energy-conserving Phong-style glossy
-materials. GPU render time is reported separately from setup, image transfer,
-and image writing.
+## Quick start
 
-## Source layout
-
-The application follows explicit data boundaries:
-
-1. `parsing/`: scene text to an owning `scene_ast::Scene`. The entire Boost.Parser
-   grammar stays in one `parser.cpp`, with exactly one `BOOST_PARSER_DEFINE_RULES`.
-   Source positions are offsets into owned text, so copying/moving an AST is safe.
-2. `building/`: AST validation/material resolution to `SceneDescription`, then
-   CPU geometry preparation to `PreparedScene` (glyph outlines, bounds, mesh fitting).
-3. `gpu/`: device selection, resource ownership, upload/HIP RT acceleration builds,
-   borrowed `TraceScene` views, traversal/custom callbacks, and image download.
-4. `rendering/`: camera, integrator, adaptive sampling, kernels, and rendering to
-   an owning `GpuImage`.
-5. `saving/`: CPU `Image` data, format selection, BMP writing, and Boost.GIL PNG
-   writing, without HIP dependencies.
-
-All directories above are under [src](src). [src/app/pipeline.h](src/app/pipeline.h)
-coordinates these stages; CLI loading/overrides live in `app/options.cpp`.
-`scene/` holds shared CPU/device data, `math/` the vector/random helpers.
-Domain code is grouped by topic: `surface/sphere.h`, `surface/torus.h`,
-`surface/text.h/.cpp`, `surface/mesh.h/.cpp`, `shader/metal.h`, `shader/glass.h`,
-`shader/phong.h`, and `texture/tiles.h`, `texture/wood.h`, `texture/marble.h`,
-`texture/mandelbrot.h`, `texture/julia.h`. Light samplers have their own `light/`
-directory. GPU dispatch uses plain data and functions, not virtual classes.
-
-Device implementation headers are compiled through one HIP translation unit per
-executable; `gpu/callbacks.h` supplies the two global symbols required by the
-linked HIP RT device library. Regression-only reference scenes live in
-[tests/reference_scene.h](tests/reference_scene.h), not in the production renderer.
-
-## Requirements
-
-- CMake 3.25 or newer
-- AMD HIP SDK 7.1, including HIP RT 3.0, its device bitcode and runtime bundles
-- Boost 1.92 or newer headers
-- Git and internet access on first configure to fetch pinned FreeType, libpng and zlib sources
-- A compatible AMD GPU
-
-On Windows, CMake defaults to `boost_1_92_0` in the user's Downloads directory.
-Set the `Boost_ROOT` CMake cache entry to use a different installation. The
-headers are found locally; CMake does not download them.
-
-FreeType 2.14.1 is built as a static, host-only dependency. CMake fetches a pinned
-commit from the official FreeType repository; no font files are downloaded.
-For offline builds, set `FETCHCONTENT_SOURCE_DIR_FREETYPE` to a local FreeType
-source directory. Compressed fonts and optional shaping/image dependencies are disabled.
-
-PNG output uses Boost.GIL with statically linked libpng 1.6.59 and zlib 1.4.
-CMake fetches pinned commits from their official repositories; no additional
-runtime DLLs are needed. For offline builds, also set `FETCHCONTENT_SOURCE_DIR_LIBPNG`
-and `FETCHCONTENT_SOURCE_DIR_ZLIB` to local source directories. License files for
-both libraries are copied alongside the executable.
-
-On Windows, CMake finds the standard `C:\Program Files\AMD\ROCm\7.1`
-installation automatically. For a different installation, set
-`HIPCC_EXECUTABLE` to the SDK 7.1 compiler when configuring. A different
-version of HIP or HIP RT is rejected.
-
-Two SDK compatibility diagnostics are narrowly exempted: HIP RT 3.0 needs the
-deprecated HIP context getter (suppressed only at that call), and its bundled
-Windows host bitcode records an older MSVC target version (`override-module`
-is disabled only for host compilation). Other compiler diagnostics remain enabled.
-
-CMake detects installed GPU architectures using the SDK's `amdgpu-arch`.
-To target a specific GPU or build on a machine without one, set
-`HIP_ARCHITECTURE` explicitly (for example, `gfx1201` for the Radeon RX 9070 XT);
-separate multiple targets with semicolons. Reconfigure after changing GPUs.
-At runtime the renderer prefers a compatible discrete GPU over an integrated GPU.
-
-## Build and render
-
-From the project directory:
+From the repository root, with the [requirements](#requirements) installed:
 
 ```powershell
 cmake -S . -B build
 cmake --build build --config Release
-.\build\bin\hiprt_demo.exe
-```
-
-Use a fresh build directory or explicitly set `HIPCC_EXECUTABLE` if an existing
-build directory is cached with another SDK, for example:
-
-```powershell
-cmake -S . -B build "-DHIPCC_EXECUTABLE=C:\Program Files\AMD\ROCm\7.1\bin\hipcc.exe"
-```
-
-On Linux or WSL, use the same CMake commands with SDK 7.1 installed.
-
-The default scene is loaded from [scenes/classic.hipscene](scenes/classic.hipscene),
-not compiled into the renderer. The BMP is saved as `hiprt_demo.bmp` in the current directory. By default,
-adaptive sampling checks each pixel after batches of eight samples and stops
-when its estimated RGB sampling error is sufficiently low. It uses at least
-64 samples, or 256 for pixels that hit glass, metal or Phong materials on a
-primary ray. The supplied maximum is always respected, even below these minima.
-The renderer reports the actual minimum, average and maximum sample counts.
-
-During rendering, a live `Rendering: 0% ... 100%` line updates after completed
-GPU batches, not just queued kernel launches. The percentage counts completed
-sample passes against the configured maximum; with adaptive sampling, it is
-not the percentage of converged pixels or an estimate of remaining time.
-Scene/GPU setup and image copying/writing have separate status messages.
-Low CPU utilization while rendering is normal: the CPU waits for GPU work.
-
-Supply an output path and optionally a positive maximum sample count for a
-quicker preview:
-
-```powershell
-.\build\bin\hiprt_demo.exe preview.bmp 32
-```
-
-For lossless PNG output, use a `.png` filename:
-
-```powershell
 .\build\bin\hiprt_demo.exe preview.png 32
 ```
 
-The output extension selects BMP or PNG, case-insensitively. Other or missing
-extensions are rejected before GPU setup. This also applies to the scene file's
-`output` setting. BMP remains the default; PNG stores the same tone-mapped 8-bit RGB
-pixels without changing rendering or adding a second gamma conversion. PNG
-compression runs on the CPU after image download, usually producing much smaller
-files than BMP.
+This renders the classic scene at **3840 x 2160**, with **at most 32 samples per
+pixel**, and saves `preview.png` in the current directory. For a lower-resolution
+preview, see [Changing the resolution](#changing-the-resolution).
 
-For a fixed-sample comparison, add `--fixed` (also usable without a path):
+Running without arguments uses the selected scene's settings:
 
 ```powershell
-.\build\bin\hiprt_demo.exe reference.bmp 1024 --fixed
+.\build\bin\hiprt_demo.exe
 ```
 
-Adaptive sampling is a heuristic: rare light paths can be missed and stopping
-based on the same samples can introduce bias. It does not guarantee identical
-quality to a fixed-sample render. GPU render time is the sum of GPU batch times,
-including adaptive sampling and sample-statistics collection, but excluding
-progress output, setup, image transfer and image writing.
+By default, that means the classic scene, 3840 x 2160 pixels, adaptive sampling
+with a maximum of 1024 samples per pixel, and output to `hiprt_demo.bmp`.
 
-### PLY meshes
+All command examples below assume the repository root is the current directory.
+Keep the executable together with the runtime files in `build\bin`.
 
-Pass a PLY file to replace the cat with a mesh:
-
-```powershell
-.\build\bin\hiprt_demo.exe preview.bmp 64 --mesh "C:\models\my mesh.ply"
-```
-
-The mesh is uniformly scaled to fit the cat's space, centered there and placed
-on the floor. Its original orientation is retained by default (Y is up); it uses a diffuse
-copper-colored material with flat triangle normals. Without `--mesh`, the
-original cat remains.
-
-For a Z-up model such as Artec's `Dragon-ply.ply`, rotate it upright before
-fitting by adding `--mesh-up z`:
-
-```powershell
-.\build\bin\hiprt_demo.exe --mesh "C:\models\Dragon-ply.ply" --mesh-up z
-```
-
-`--mesh-up y` explicitly selects the default orientation.
-
-ASCII and little- or big-endian binary PLY files are supported. Each file must
-contain vertex `x`, `y`, `z` coordinates and triangular faces with an integer
-`vertex_indices` (or `vertex_index`) list. Non-triangular faces must be
-triangulated first. Additional properties such as colors, texture coordinates
-and vertex normals are ignored. Invalid files are reported as errors.
-No external model assets are included; check their licenses before use.
-
-Alternatively, `cmake --build build --target run --config Release` renders
-to `build\hiprt_demo.bmp`. Rendering does not run the tests.
-
-### Detail scene
-
-Select [scenes/detail.hipscene](scenes/detail.hipscene) and supply a PLY mesh. For example, with the
-Z-up Artec dragon downloaded separately:
-
-```powershell
-.\build\bin\hiprt_demo.exe --scene detail --mesh ".\ply\Dragon-ply\Dragon-ply.ply" --mesh-up z
-```
-
-The scene fits the mesh in the center of the Cornell box and places a mirror
-sphere and a glass sphere alongside it. The suspended emissive torus is the
-light source, including for direct lighting, reflections and refractions.
-The floor has procedural tiles with pronounced recessed-looking grout, using bump
-mapping rather than displaced geometry. The back wall has pale marble with
-dark blue-gray veins, formed by domain-warped fractal noise. Gold "HIP RT"
-lettering above the dragon projects 0.2 scene units out of the marble: its
-extrusion starts just inside the back wall so there is no gap.
-The lettering uses Windows Arial; change its `font` path in
-[scenes/detail.hipscene](scenes/detail.hipscene) when using another system.
-The wood grain
-is on the ceiling, mapped across X/Z rather than the back wall's X/Y;
-the red left wall displays the Mandelbrot set and the green right wall a Julia set.
-These textures are procedural and need no image files. The mesh uses a cool blue,
-glossy Phong material to stand out against the marble.
-Its fitting dimensions differ from
-the classic scene, and large meshes need additional GPU memory and render time.
-The original scene remains the default and is also selectable with
-`--scene classic`.
-
-### Non-triangulated extruded text
-
-Render the supplied text example:
-
-```powershell
-.\build\bin\hiprt_demo.exe text-preview.bmp 32 --scene .\scenes\text.hipscene
-```
-
-The example uses Windows Arial. Change both `font` paths in
-[scenes/text.hipscene](scenes/text.hipscene) to a local scalable TrueType or
-OpenType font on other systems. Fonts are not bundled; check their licenses
-before redistributing them.
-
-Add a text object after the light in any scene:
+## Command-line reference
 
 ```text
-text {
-    font "C:\\Windows\\Fonts\\arial.ttf"
-    value "Hello HIP RT"
-    size 0.8
-    depth 0.25
-    position [-2, 0.02, 0]
-    material gold
+hiprt_demo.exe [OUTPUT.bmp|OUTPUT.png] [SAMPLES]
+               [--scene classic|detail|FILE]
+               [--fixed]
+               [--mesh FILE.ply] [--mesh-up y|z]
+```
+
+| Argument / option | Meaning | If omitted |
+| --- | --- | --- |
+| `OUTPUT.bmp` or `OUTPUT.png` | Output filename. Its extension selects the image format, case-insensitively. | Uses the scene's `image.output`. |
+| `SAMPLES` | Positive integer: maximum samples per pixel; with `--fixed`, the exact count per pixel. Requires an output filename before it. | Uses the scene's `sampling.max` or fixed `sampling.count`. |
+| `--scene NAME_OR_FILE` | Selects preset `classic`, preset `detail`, or a `.hipscene` file. | Uses the classic scene. |
+| `--fixed` | Disables adaptive sampling and renders the maximum count for every pixel. | Uses the scene's sampling mode. |
+| `--mesh FILE.ply` | Replaces the scene's single cat or PLY mesh with this file. | Uses the scene's existing meshes. |
+| `--mesh-up y` or `--mesh-up z` | Chooses the source mesh's up axis. Requires `--mesh`. | A `--mesh` replacement uses Y up; without a replacement, the scene's `up` setting applies. |
+
+Options may appear before or after positional arguments, but **the output
+filename must precede the sample count**. Quote paths containing spaces.
+To change only the sample count, still supply an output filename:
+
+```powershell
+.\build\bin\hiprt_demo.exe preview.png 64
+```
+
+**There are currently no `--width`, `--height`, `--resolution`, `--samples`,
+`--adaptive` or `--help` options.** Resolution and advanced settings are edited
+in a scene file; the table above lists all supported command-line options.
+
+### Common commands
+
+```powershell
+.\build\bin\hiprt_demo.exe preview.png 32
+.\build\bin\hiprt_demo.exe reference.png 256 --fixed
+.\build\bin\hiprt_demo.exe --scene .\scenes\my-scene.hipscene
+.\build\bin\hiprt_demo.exe text.png 64 --scene .\scenes\text.hipscene
+.\build\bin\hiprt_demo.exe model.png 64 --mesh "C:\models\my model.ply"
+.\build\bin\hiprt_demo.exe detail.png 64 --scene detail --mesh "C:\models\Dragon-ply.ply" --mesh-up z
+```
+
+PNG is lossless and stores the same rendered pixels as BMP, usually in a much
+smaller file. Only `.png` and `.bmp` are supported; missing or other extensions
+are rejected before GPU setup. Existing output files are overwritten.
+
+## Which settings can I change where?
+
+| Setting | Command line | Scene file |
+| --- | --- | --- |
+| Output path / PNG or BMP | First positional argument | `image.output` |
+| Resolution | **No option** | `image.size [width, height]` |
+| Maximum samples per pixel | Second positional argument | Adaptive `max` or fixed `count` |
+| Fixed sampling | `--fixed` | `sampling fixed` |
+| Adaptive sampling | No option to enable it | `sampling adaptive` |
+| Sampling batches / convergence thresholds | No options | Fields in the `sampling` block |
+| Imported mesh / its up axis | `--mesh`, `--mesh-up` | Fields in each `mesh` block |
+| Camera, room, lighting, materials, text and object placement | No options | Corresponding scene blocks |
+
+Command-line values override only the settings explicitly supplied. Other
+settings remain as defined in the selected scene.
+
+## Changing the resolution
+
+Resolution is controlled by the **`image` block in the scene file**, not by a
+command-line option.
+
+For example, make a copy of the classic scene:
+
+```powershell
+Copy-Item .\scenes\classic.hipscene .\scenes\preview.hipscene
+```
+
+In the copy, replace the existing `image` block with:
+
+```text
+image {
+    size [960, 540]
+    output "preview.png"
 }
 ```
 
-`size` is the em size in scene units, not a fitted bounding-box height.
-`position` is the left baseline origin at the back cap; glyphs lie in XY and
-extrude toward +Z by `depth`. Text uses the existing named materials, so it
-casts shadows and participates in reflections and refractions.
-Strings are single-line UTF-8. Spaces, glyph advances and legacy font kerning
-are supported; complex-script shaping, ligatures and bidirectional layout are not.
-Missing glyphs, invalid UTF-8 and font-loading errors are reported explicitly.
-Relative font paths resolve from the scene file's directory.
-
-FreeType decomposes outlines into lines and quadratic/cubic Bezier curves on
-the CPU. HIP RT builds one AABB per visible glyph. GPU custom intersections
-test the caps with the font's fill rule (including counters/holes) and solve
-the curved extrusion sides directly, with analytic normals. No flattening
-or triangulation is used.
-
-### Scene description files
-
-The host-side loader uses **Boost.Parser**, not Boost.Spirit. Named `bp::rule`
-definitions describe the grammar and produce typed attributes; a separate
-validation/conversion step resolves materials and constructs the render scene.
-Start the tracer
-with a scene file:
+Then render it with a low sample budget:
 
 ```powershell
-.\build\bin\hiprt_demo.exe --scene .\scenes\classic.hipscene
-.\build\bin\hiprt_demo.exe preview.bmp 32 --scene .\scenes\detail.hipscene --fixed
+.\build\bin\hiprt_demo.exe preview.png 32 --scene .\scenes\preview.hipscene
 ```
 
-`--scene classic` and `--scene detail` are aliases for the supplied files.
-The detail file refers to the separately downloaded dragon; edit its mesh path
-or use `--mesh` to override it. The built-in aliases locate the source-tree
-scene directory recorded by CMake, independently of the working directory.
+This produces a **960 x 540 PNG with at most 32 samples per pixel**. Other useful
+sizes are `[1280, 720]`, `[1920, 1080]` and `[3840, 2160]`.
+Reducing either resolution or sample count reduces rendering work.
 
-See [scenes/detail.hipscene](scenes/detail.hipscene) for a complete
-`hipscene 1` example. Sections and fields must appear
-in the documented order: image, sampling, camera, room, material definitions,
-one light, then objects. Arbitrary whitespace is allowed; comments are not
-part of version 1. Strings support `\"` and `\\` escapes.
+Copying a scene alongside the original preserves the base directory for its
+relative asset paths. Moving it to another directory may require updating those
+paths.
 
-Scene files control:
+## Samples and image quality
 
-- Image dimensions and BMP/PNG output path.
-- Fixed or adaptive sampling, including batch size and convergence thresholds.
-  The maximum sample count caps both adaptive minima.
-- Camera position, target, and half-view height.
-- Room dimensions, wall colors, and the existing procedural surfaces.
-- Named diffuse, Phong, metal (with roughness), and glass materials.
-- One ceiling rectangle or emissive torus, including radiance and dimensions.
-- Any number of spheres, tilted tori, extruded text objects, and independently fitted/materialed PLY meshes.
-  `cat` and `crystal` insert the original procedural models at their original positions.
+More samples generally reduce noise but increase render time.
 
-The detail room selects its textures directly in the description:
+- **Adaptive:** each pixel may stop early when its estimated noise is low enough.
+  The supplied sample count is an upper limit.
+- **Fixed:** every pixel receives exactly the supplied sample count. Use
+  `--fixed` for fixed-sample comparisons.
+
+The classic and detail scenes use this adaptive configuration:
 
 ```text
-room {
-    size [6, 4, 5]
-    floor tiles_detail
-    ceiling wood_detail
-    back marble_detail
-    left mandelbrot_detail
-    right julia_detail
+sampling adaptive {
+    min 64
+    specular_min 256
+    max 1024
+    batch 8
+    relative_error 0.05
+    brightness_floor 0.05
 }
 ```
 
-Every surface also accepts `color [r, g, b]`. `wood_detail` remains supported
-on the back wall for existing descriptions. Marble and wood are evaluated on
-the GPU from the hit position, without image assets or changes to geometry.
+| Field | Meaning |
+| --- | --- |
+| `min` | Minimum samples before ordinary pixels can stop early. |
+| `specular_min` | Minimum for pixels whose primary ray hits glass, metal or Phong material. |
+| `max` | Maximum samples for any pixel; overridden by the CLI sample count. |
+| `batch` | Number of sample passes per GPU batch. Smaller batches give more frequent progress updates. |
+| `relative_error` | Estimated relative RGB noise threshold. Lower values demand more samples. |
+| `brightness_floor` | Lower bound on the brightness used when checking relative noise in dark pixels. |
 
-`tilt_x` is in degrees. Rectangle centers and sizes use X/Z coordinates and
-full extents; room sizes are also full extents, with the floor at Y=0.
-Mesh fitting is uniform, with `position` giving the horizontal center and the
-bottom Y coordinate after the optional Z-up rotation.
+The maximum always wins: requesting 32 samples caps rendering at 32 even when
+`min` or `specular_min` is higher. The renderer reports actual minimum, average
+and maximum sample counts after adaptive rendering. Adaptive stopping is a
+heuristic, not a guarantee of matching fixed-sample quality.
 
-Mesh file paths are relative to the **scene file's directory**. Output paths
-and command-line `--mesh` paths are relative to the working directory.
-Positional output/sample arguments and `--fixed` override the file's settings.
-`--mesh` replaces exactly one cat or PLY mesh; ambiguous replacements are errors,
-and `--mesh-up` still requires `--mesh`.
+For fixed sampling directly in a scene, replace the entire sampling block:
 
-Syntax and validation errors include the scene filename, line, and column.
-Invalid dimensions, non-finite numbers, duplicate material names, and unknown
-material references are rejected before GPU setup.
+```text
+sampling fixed {
+    count 256
+    batch 8
+}
+```
+
+There is no CLI switch to re-enable adaptive sampling for a fixed-sampling scene.
+Edit its sampling block instead.
+
+## Supplied scenes and assets
+
+| Scene | Selection | Default settings | External assets |
+| --- | --- | --- | --- |
+| [Classic](scenes/classic.hipscene) | `--scene classic` | 3840 x 2160, adaptive up to 1024 samples, `hiprt_demo.bmp` | None. |
+| [Detail](scenes/detail.hipscene) | `--scene detail` | 3840 x 2160, adaptive up to 1024 samples, `detail.bmp` | PLY mesh and a font. |
+| [Text](scenes/text.hipscene) | `--scene .\scenes\text.hipscene` | 1280 x 720, adaptive up to 256 samples, `text.bmp` | A font. |
+
+**Classic** contains colored walls, a ceiling light, spheres, tilted tori, a
+faceted crystal and a low-poly cat.
+
+**Detail** contains a luminous torus, mirror and glass spheres, an imported mesh,
+procedural tiles/wood/marble/fractals, and gold "HIP RT" lettering projecting out
+of the back wall. The scene refers to a separately downloaded dragon mesh.
+Either edit its mesh path or use `--mesh` to supply your own.
+
+**Text** demonstrates extruded lettering with holes, curved outlines,
+reflections and shadows. `text` is not a preset alias; pass its scene file path.
+
+The detail and text scenes refer to Windows Arial. On other systems, change
+their `font` paths to a local scalable TrueType or OpenType font. Fonts and
+external model assets are not bundled; check their licenses before use.
+
+### Importing a PLY mesh
+
+`--mesh` requires a scene with **exactly one cat or PLY mesh**. It replaces that
+object, not the whole scene. Zero or multiple replacement candidates are errors;
+use scene-file `mesh` blocks to configure multiple models independently.
+
+Meshes are uniformly scaled to fit the configured space, horizontally centered,
+and positioned with their bottom at the configured Y coordinate. Replacing the
+classic cat uses its original space and a diffuse copper-colored material.
+Replacing a scene's PLY mesh preserves that mesh's fitting, position and material.
+
+Use `--mesh-up z` for Z-up source models; the default for CLI replacements is Y up.
+PLY files may be ASCII or little-/big-endian binary, but **faces must already be
+triangles**. Vertex colors, normals and texture coordinates are ignored.
+
+## Editing scene files
+
+Start with a supplied `.hipscene` file and modify it. Sections must remain in
+this order:
+
+```text
+hipscene 1
+image { ... }
+sampling adaptive { ... }
+camera { ... }
+room { ... }
+material definitions
+one light
+objects
+```
+
+This is an outline, not a complete scene. Field order within blocks also matters;
+use the supplied files as examples. Comments are not supported. Strings support
+`\"` and `\\` escapes; Windows paths inside scene strings need escaped backslashes
+or forward slashes.
+
+Scenes control camera position/target/view size, room dimensions and surfaces,
+named diffuse/metal/glass/Phong materials, one rectangle or torus light, and any
+number of spheres, tori, PLY meshes and text objects. `cat` and `crystal` insert
+the supplied procedural models.
+
+For text, `value` is single-line UTF-8, `size` is the em size in scene units,
+`depth` is extrusion depth, and `position` is the baseline origin at the back cap.
+Text lies in XY and extrudes toward +Z. Complex-script shaping, ligatures and
+bidirectional layout are not supported.
+
+### Path rules
+
+| Path | Relative to |
+| --- | --- |
+| `--scene FILE` | Current working directory. |
+| `--mesh FILE.ply` | Current working directory. |
+| Output path, whether on the CLI or in a scene | Current working directory. |
+| `file` in a scene's `mesh` block | The scene file's directory. |
+| `font` in a scene's `text` block | The scene file's directory. |
+
+The `classic` and `detail` aliases locate the source-tree scene directory
+recorded when building, independently of the working directory. Keep those
+scene files available, or select another file explicitly.
+
+## Progress and troubleshooting
+
+- **Progress:** `Rendering: 0% ... 100%` counts completed sample passes against
+  the maximum budget. It is not a remaining-time estimate or the percentage of
+  converged pixels.
+- **100% but no image yet:** GPU rendering has finished; downloading the image
+  and writing/compressing it happen afterward, with a separate status message.
+- **Low CPU utilization:** normal while waiting for the GPU. Large meshes also
+  need setup time and GPU memory before rendering starts.
+- **Cannot load a mesh or font:** check the [path rules](#path-rules), asset
+  availability and the font paths in the selected scene.
+- **Unknown option:** use the [CLI reference](#command-line-reference).
+  Resolution is set in the scene, and sample count is positional.
+- **Scene syntax error:** errors include the scene filename, line and column.
+  Check section/field order and material names.
+
+Reported GPU time excludes scene setup, image download and PNG/BMP writing.
+
+## Requirements
+
+- A compatible AMD GPU.
+- AMD HIP SDK **7.1**, including HIP RT **3.0**, its device library and runtime bundles.
+- A C++23-capable host compiler and CMake **3.25+**.
+- Boost **1.92+** headers.
+- Git and internet access on first configure for FreeType, libpng and zlib.
+
+On Windows, install the Visual Studio C++ build tools. CMake defaults to HIP SDK
+at `C:\Program Files\AMD\ROCm\7.1` and Boost at
+`%USERPROFILE%\Downloads\boost_1_92_0`. Different HIP/HIP RT versions are rejected.
+
+Optional **CMake settings** (not renderer command-line options):
+
+| Setting | Purpose |
+| --- | --- |
+| `-DBoost_ROOT=C:\path\to\boost` | Use another Boost installation. |
+| `-DHIPCC_EXECUTABLE=C:\path\to\hipcc.exe` | Select the HIP SDK 7.1 compiler. |
+| `-DHIP_ARCHITECTURE=gfx1201` | Build for an explicit GPU architecture instead of detecting local GPUs. Separate multiple targets with semicolons. |
+
+Quote a complete `-D...` argument when its path contains spaces. Reconfigure
+after changing GPUs; at runtime the app automatically prefers a compatible
+discrete GPU over an integrated one.
+
+FreeType, libpng and zlib are built statically from pinned sources. For offline
+builds, set `FETCHCONTENT_SOURCE_DIR_FREETYPE`, `FETCHCONTENT_SOURCE_DIR_LIBPNG`
+and `FETCHCONTENT_SOURCE_DIR_ZLIB` to local source directories.
+
+On Linux/WSL, use the same CMake build commands with SDK 7.1 and a compatible
+GPU environment; run `./build/bin/hiprt_demo` instead of the Windows executable.
 
 ## Tests
 
-The separate GPU test executable checks adaptive sampling, mesh and custom-primitive intersections,
-room lighting, Phong sampling, reflection, glass refraction, and cat visibility
-without rendering an image. CTest additionally checks PLY parsing, imported
-mesh intersections and the detail scene's materials, procedural walls and floor, and torus lighting.
-CPU scene-loader tests cover both supplied scenes, parsing errors, validation,
-and relative paths. GPU scene-description checks exercise custom dimensions,
-primitive radii/tilts, multiple mesh transforms/materials, and empty geometry:
-
 ```powershell
-.\build\bin\hiprt_tests.exe
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-It uses the same scene and GPU selection as the renderer and returns a nonzero
-exit code on failure. Run it after changing the GPU, driver or SDK, since the
-renderer no longer performs these checks automatically. After building, it can
-also be run with `ctest --test-dir build -C Release --output-on-failure`.
+Tests cover scene loading, meshes, text, materials, rendering progress and
+PNG/BMP output. GPU tests require a compatible GPU. Set the CMake variable
+`HIP_DEMO_TEST_FONT` to a scalable font file if Arial or DejaVu Sans is not found.
 
-CPU image tests verify BMP byte layout and lossless PNG round trips, including
-RGB channels, row order, invalid buffers, output paths and extension selection.
-Renderer tests exercise PNG filenames both on the command line and in scene files.
+## Distribution and licenses
 
-Text tests cover analytic line/quadratic/cubic intersections, counters, normals,
-inside rays, ray limits and font errors. With an available Arial or DejaVu Sans
-font, CTest also checks font loading and thousands of HIP RT text intersections
-without generating triangles. Set `HIP_DEMO_TEST_FONT` to a scalable font file
-if neither font is found automatically.
+Keep the HIP/HIP RT runtime files copied to `build\bin` alongside the executable.
+Include the copied `RPLY-LICENSE.txt`, `FREETYPE-LICENSE.txt`,
+`LIBPNG-LICENSE.txt` and `ZLIB-LICENSE.txt` when redistributing binaries.
 
-The build copies HIP RT runtime bundles and, on Windows, the matching HIP,
-COMGR and HIP RT runtime DLLs alongside the executable. Keep these files
-together: using a different system HIP runtime produced incorrect triangle
-hits in testing.
-
-PLY support uses RPly 1.1.3 by Diego Nehab, under the MIT license. Its original
-source and notices are in [third_party/rply](third_party/rply); the build also
-copies `RPLY-LICENSE.txt` next to the executables. Include that notice when
-redistributing the binaries.
+PLY support uses RPly 1.1.3 by Diego Nehab under the MIT license; its source and
+notices are in [third_party/rply](third_party/rply).
 
 Portions of this software are copyright (c) 2025 The FreeType Project
 (https://freetype.org). All rights reserved. FreeType is used under the
-FreeType License; the build copies `FREETYPE-LICENSE.txt` next to the executables.
-Include that notice when redistributing the binaries.
+FreeType License.
