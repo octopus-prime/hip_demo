@@ -19,6 +19,27 @@ find_package(Boost 1.92 REQUIRED)
 cmake_policy(POP)
 
 include(FetchContent)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG 99623ef7097352da7993ba614161fd6a311e046e
+    OVERRIDE_FIND_PACKAGE)
+FetchContent_MakeAvailable(zlib)
+add_library(ZLIB::ZLIB ALIAS zlibstatic)
+set(PNG_SHARED OFF CACHE BOOL "" FORCE)
+set(PNG_STATIC ON CACHE BOOL "" FORCE)
+set(PNG_TESTS OFF CACHE BOOL "" FORCE)
+set(PNG_TOOLS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(libpng
+    GIT_REPOSITORY https://github.com/pnggroup/libpng.git
+    GIT_TAG cd952f49f95bb27154ae77dbb103032d95f6e580)
+block(PROPAGATE libpng_SOURCE_DIR libpng_BINARY_DIR)
+    set(SKIP_INSTALL_ALL ON)
+    FetchContent_MakeAvailable(libpng)
+endblock()
 set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_BZIP2 ON CACHE BOOL "" FORCE)
 set(FT_DISABLE_PNG ON CACHE BOOL "" FORCE)
@@ -234,14 +255,19 @@ target_compile_definitions(scene_description PRIVATE
 add_library(text_geometry STATIC src/surface/text.cpp)
 target_include_directories(text_geometry PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(text_geometry PRIVATE freetype)
-add_library(app_support STATIC src/app/options.cpp src/saving/bmp.cpp)
-target_link_libraries(app_support PUBLIC scene_description)
+add_library(app_support STATIC src/app/options.cpp src/saving/image.cpp src/saving/bmp.cpp src/saving/png.cpp)
+target_link_libraries(app_support PUBLIC scene_description PRIVATE Boost::headers png_static)
 add_custom_command(TARGET hiprt_runtime POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${freetype_SOURCE_DIR}/docs/FTL.TXT"
         "${CMAKE_CURRENT_BINARY_DIR}/bin/FREETYPE-LICENSE.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${libpng_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/LIBPNG-LICENSE.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${zlib_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_BINARY_DIR}/bin/ZLIB-LICENSE.txt"
     VERBATIM)
 if(MSVC)
-    set_property(TARGET rply ply_mesh scene_description text_geometry app_support PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    set_property(TARGET rply ply_mesh scene_description text_geometry app_support png_static zlibstatic
+        PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
 function(add_hiprt_executable target source_path)
@@ -253,13 +279,14 @@ function(add_hiprt_executable target source_path)
         COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS}
             -fgpu-rdc "${source}"
             -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
+            "$<TARGET_FILE:app_support>"
             "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
             "$<TARGET_FILE:scene_description>" ${HIPRT_LINK_OPTIONS}
             "$<TARGET_FILE:text_geometry>" "$<TARGET_FILE:freetype>"
-            "$<TARGET_FILE:app_support>"
+            "$<TARGET_FILE:png_static>" "$<TARGET_FILE:zlibstatic>"
             -o "${output}"
         DEPENDS "${source}" ${HIP_DEMO_HEADERS}
-            ply_mesh rply scene_description text_geometry freetype app_support
+            ply_mesh rply scene_description text_geometry freetype app_support png_static zlibstatic
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
@@ -305,7 +332,7 @@ endif()
 add_test(NAME scene_description_tests COMMAND scene_description_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
 add_executable(app_support_tests tests/app_support_tests.cpp)
-target_link_libraries(app_support_tests PRIVATE app_support)
+target_link_libraries(app_support_tests PRIVATE app_support Boost::headers png_static)
 if(MSVC)
     set_property(TARGET app_support_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()

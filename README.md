@@ -9,11 +9,11 @@ native triangles for the meshes. The room is intersected directly.
 The polished sphere next to the crystal reflects it like a mirror, while a
 separate glass sphere shows transparency and refraction.
 
-The renderer produces UHD 4K BMP images (3840 x 2160) with up to 1024 samples
+The renderer produces UHD 4K BMP or PNG images (3840 x 2160) with up to 1024 samples
 per pixel by default. It uses HIP `float3`, direct area-light sampling, indirect
 bounces, and metal, glass, diffuse, and energy-conserving Phong-style glossy
 materials. GPU render time is reported separately from setup, image transfer,
-and BMP writing.
+and image writing.
 
 ## Source layout
 
@@ -28,7 +28,8 @@ The application follows explicit data boundaries:
    borrowed `TraceScene` views, traversal/custom callbacks, and image download.
 4. `rendering/`: camera, integrator, adaptive sampling, kernels, and rendering to
    an owning `GpuImage`.
-5. `saving/`: CPU `Image` data and standalone BMP writing, without HIP dependencies.
+5. `saving/`: CPU `Image` data, format selection, BMP writing, and Boost.GIL PNG
+   writing, without HIP dependencies.
 
 All directories above are under [src](src). [src/app/pipeline.h](src/app/pipeline.h)
 coordinates these stages; CLI loading/overrides live in `app/options.cpp`.
@@ -49,7 +50,7 @@ linked HIP RT device library. Regression-only reference scenes live in
 - CMake 3.25 or newer
 - AMD HIP SDK 7.1, including HIP RT 3.0, its device bitcode and runtime bundles
 - Boost 1.92 or newer headers
-- Git and internet access on first configure to fetch the pinned FreeType source
+- Git and internet access on first configure to fetch pinned FreeType, libpng and zlib sources
 - A compatible AMD GPU
 
 On Windows, CMake defaults to `boost_1_92_0` in the user's Downloads directory.
@@ -60,6 +61,12 @@ FreeType 2.14.1 is built as a static, host-only dependency. CMake fetches a pinn
 commit from the official FreeType repository; no font files are downloaded.
 For offline builds, set `FETCHCONTENT_SOURCE_DIR_FREETYPE` to a local FreeType
 source directory. Compressed fonts and optional shaping/image dependencies are disabled.
+
+PNG output uses Boost.GIL with statically linked libpng 1.6.59 and zlib 1.4.
+CMake fetches pinned commits from their official repositories; no additional
+runtime DLLs are needed. For offline builds, also set `FETCHCONTENT_SOURCE_DIR_LIBPNG`
+and `FETCHCONTENT_SOURCE_DIR_ZLIB` to local source directories. License files for
+both libraries are copied alongside the executable.
 
 On Windows, CMake finds the standard `C:\Program Files\AMD\ROCm\7.1`
 installation automatically. For a different installation, set
@@ -108,7 +115,7 @@ During rendering, a live `Rendering: 0% ... 100%` line updates after completed
 GPU batches, not just queued kernel launches. The percentage counts completed
 sample passes against the configured maximum; with adaptive sampling, it is
 not the percentage of converged pixels or an estimate of remaining time.
-Scene/GPU setup and image copying/BMP writing have separate status messages.
+Scene/GPU setup and image copying/writing have separate status messages.
 Low CPU utilization while rendering is normal: the CPU waits for GPU work.
 
 Supply an output path and optionally a positive maximum sample count for a
@@ -117,6 +124,19 @@ quicker preview:
 ```powershell
 .\build\bin\hiprt_demo.exe preview.bmp 32
 ```
+
+For lossless PNG output, use a `.png` filename:
+
+```powershell
+.\build\bin\hiprt_demo.exe preview.png 32
+```
+
+The output extension selects BMP or PNG, case-insensitively. Other or missing
+extensions are rejected before GPU setup. This also applies to the scene file's
+`output` setting. BMP remains the default; PNG stores the same tone-mapped 8-bit RGB
+pixels without changing rendering or adding a second gamma conversion. PNG
+compression runs on the CPU after image download, usually producing much smaller
+files than BMP.
 
 For a fixed-sample comparison, add `--fixed` (also usable without a path):
 
@@ -128,7 +148,7 @@ Adaptive sampling is a heuristic: rare light paths can be missed and stopping
 based on the same samples can introduce bias. It does not guarantee identical
 quality to a fixed-sample render. GPU render time is the sum of GPU batch times,
 including adaptive sampling and sample-statistics collection, but excluding
-progress output, setup, image transfer and BMP writing.
+progress output, setup, image transfer and image writing.
 
 ### PLY meshes
 
@@ -258,7 +278,7 @@ part of version 1. Strings support `\"` and `\\` escapes.
 
 Scene files control:
 
-- Image dimensions and BMP output path.
+- Image dimensions and BMP/PNG output path.
 - Fixed or adaptive sampling, including batch size and convergence thresholds.
   The maximum sample count caps both adaptive minima.
 - Camera position, target, and half-view height.
@@ -318,6 +338,10 @@ It uses the same scene and GPU selection as the renderer and returns a nonzero
 exit code on failure. Run it after changing the GPU, driver or SDK, since the
 renderer no longer performs these checks automatically. After building, it can
 also be run with `ctest --test-dir build -C Release --output-on-failure`.
+
+CPU image tests verify BMP byte layout and lossless PNG round trips, including
+RGB channels, row order, invalid buffers, output paths and extension selection.
+Renderer tests exercise PNG filenames both on the command line and in scene files.
 
 Text tests cover analytic line/quadratic/cubic intersections, counters, normals,
 inside rays, ray limits and font errors. With an available Arial or DejaVu Sans

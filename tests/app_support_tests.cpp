@@ -1,5 +1,9 @@
 #include "app/options.h"
 #include "saving/bmp.h"
+#include "saving/png.h"
+
+#include <boost/gil.hpp>
+#include <boost/gil/extension/io/png.hpp>
 
 #include <algorithm>
 #include <array>
@@ -39,7 +43,7 @@ void check_options(const std::string& fixture) {
 
 void check_bmp(const std::filesystem::path& output) {
     const hip_demo::Image image{1, 2, {0x332211u, 0x665544u}};
-    hip_demo::save_bmp(image, output.string());
+    hip_demo::save_image(image, output.string());
     std::ifstream input(output, std::ios::binary);
     const std::vector<unsigned char> bytes{std::istreambuf_iterator<char>(input), {}};
     input.close();
@@ -65,6 +69,52 @@ void check_bmp(const std::filesystem::path& output) {
     std::filesystem::remove(output);
 }
 
+void check_png(std::filesystem::path output) {
+    output.replace_extension(".PNG");
+    const hip_demo::Image image{3, 2, {0x0000ffu, 0x00ff00u, 0xff0000u, 0x332211u, 0xffffffu, 0u}};
+    hip_demo::save_image(image, output.string());
+    boost::gil::rgb8_image_t decoded;
+    boost::gil::read_image(output.string(), decoded, boost::gil::png_tag{});
+    const auto pixels = boost::gil::const_view(decoded);
+    if (pixels.width() != image.width || pixels.height() != image.height) {
+        throw std::runtime_error("PNG dimensions changed");
+    }
+    for (int y = 0; y < image.height; ++y) {
+        for (int x = 0; x < image.width; ++x) {
+            const auto expected = image.pixels[x + static_cast<std::size_t>(y) * image.width];
+            const auto pixel = pixels(x, y);
+            if (boost::gil::at_c<0>(pixel) != (expected & 0xff) ||
+                boost::gil::at_c<1>(pixel) != ((expected >> 8) & 0xff) ||
+                boost::gil::at_c<2>(pixel) != ((expected >> 16) & 0xff)) {
+                throw std::runtime_error("PNG RGB channels or top-down row order changed");
+            }
+        }
+    }
+    try {
+        hip_demo::save_png(image, (output / "cannot_create.png").string());
+        throw std::logic_error("An unwritable PNG path was accepted");
+    } catch (const std::runtime_error& error) {
+        if (std::string(error.what()).find("Could not open output image:") == std::string::npos) throw;
+    }
+    try {
+        hip_demo::save_png({2, 2, {0}}, output.string());
+        throw std::logic_error("An incomplete PNG pixel buffer was accepted");
+    } catch (const std::runtime_error& error) {
+        if (std::string(error.what()).find("Invalid image dimensions or pixel count") == std::string::npos) throw;
+    }
+    std::filesystem::remove(output);
+    for (const auto* extension : {".jpg", ""}) {
+        output.replace_extension(extension);
+        try {
+            hip_demo::save_image(image, output.string());
+            throw std::logic_error("An unsupported output extension was accepted");
+        } catch (const std::runtime_error& error) {
+            if (std::string(error.what()).find("use .bmp or .png") == std::string::npos) throw;
+        }
+        if (std::filesystem::exists(output)) throw std::runtime_error("Unsupported output created a file");
+    }
+}
+
 }
 
 int main(int argc, char** argv) {
@@ -72,7 +122,8 @@ int main(int argc, char** argv) {
         if (argc != 3) throw std::runtime_error("Expected scene fixture and temporary BMP path");
         check_options(argv[1]);
         check_bmp(argv[2]);
-        std::cout << "CLI and CPU-only BMP boundary checks passed.\n";
+        check_png(argv[2]);
+        std::cout << "CLI and CPU-only BMP/PNG boundary checks passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "App support checks failed: " << error.what() << '\n';

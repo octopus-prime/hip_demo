@@ -67,7 +67,7 @@ SceneDescription load_options(int argc, char** argv) {
             ++positional_count;
         } else {
             throw std::runtime_error(
-                "Usage: renderer [output.bmp] [samples-per-pixel] [--fixed] [--scene file|classic|detail] "
+                "Usage: renderer [output.bmp|output.png] [samples-per-pixel] [--fixed] [--scene file|classic|detail] "
                 "[--mesh file.ply] [--mesh-up y|z]");
         }
     }

@@ -5,7 +5,7 @@
 #include "gpu/device.h"
 #include "gpu/download.h"
 #include "gpu/scene.h"
-#include "saving/bmp.h"
+#include "saving/image.h"
 #include <iostream>
 #include <utility>
 
@@ -14,6 +14,7 @@ namespace hip_demo {
 inline int run_demo(int argc, char** argv) {
     try {
         const auto description = load_options(argc, argv);
+        const auto format = image_format(description.output);
         const auto device = select_device();
         const auto& sampling = description.settings.sampling;
         std::cout << "Rendering on " << device.properties.name << " ("
@@ -26,9 +27,10 @@ inline int run_demo(int argc, char** argv) {
         auto prepared = prepare_scene(description);
         const HiprtScene scene(device.id, std::move(prepared));
         const auto rendered = render_image(scene.scene(), description);
-        std::cout << "Copying image to CPU and writing BMP...\n" << std::flush;
+        std::cout << "Copying image to CPU and writing "
+                  << (format == ImageFormat::png ? "PNG" : "BMP") << "...\n" << std::flush;
         const auto image = download_image(rendered);
-        save_bmp(image, description.output);
+        save_image(image, description.output);
         std::cout << "Saved " << description.output << " (" << description.width << 'x' << description.height
                   << ", " << (sampling.adaptive ? "up to " : "") << sampling.maximum
                   << " samples per pixel).\n";

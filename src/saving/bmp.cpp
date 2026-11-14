@@ -8,14 +8,13 @@
 namespace hip_demo {
 
 void save_bmp(const Image& data, const std::string& output_path) {
+    validate_image(data);
     const auto& pixels = data.pixels;
     const int image_width = data.width;
     const int image_height = data.height;
     constexpr std::uint32_t header_size = 54;
     const std::uint64_t row_bytes = (static_cast<std::uint64_t>(image_width) * 3 + 3) & ~3ull;
-    if (image_width <= 0 || image_height <= 0 ||
-        pixels.size() != static_cast<std::uint64_t>(image_width) * image_height ||
-        row_bytes * image_height > std::numeric_limits<std::uint32_t>::max() - header_size) {
+    if (row_bytes * image_height > std::numeric_limits<std::uint32_t>::max() - header_size) {
         throw std::runtime_error("Invalid image dimensions or pixel count for BMP: " + output_path);
     }
     std::ofstream image(output_path, std::ios::binary);
