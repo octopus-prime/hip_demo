@@ -1,9 +1,7 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
 
 enum class MeshUp { y, z };
@@ -88,8 +86,3 @@ struct SceneDescription {
     std::vector<SceneMesh> meshes;
     std::vector<SceneText> texts;
 };
-
-SceneDescription parse_scene_description(std::string_view text, const std::string& source = "<scene>");
-SceneDescription load_scene_description(const std::string& path);
-std::string builtin_scene_path(bool detail);
-void override_scene_mesh(SceneDescription& scene, const std::string& path, MeshUp up);

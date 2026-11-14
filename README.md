@@ -15,6 +15,35 @@ bounces, and metal, glass, diffuse, and energy-conserving Phong-style glossy
 materials. GPU render time is reported separately from setup, image transfer,
 and BMP writing.
 
+## Source layout
+
+The application follows explicit data boundaries:
+
+1. `parsing/`: scene text to an owning `scene_ast::Scene`. The entire Boost.Parser
+   grammar stays in one `parser.cpp`, with exactly one `BOOST_PARSER_DEFINE_RULES`.
+   Source positions are offsets into owned text, so copying/moving an AST is safe.
+2. `building/`: AST validation/material resolution to `SceneDescription`, then
+   CPU geometry preparation to `PreparedScene` (glyph outlines, bounds, mesh fitting).
+3. `gpu/`: device selection, resource ownership, upload/HIP RT acceleration builds,
+   borrowed `TraceScene` views, traversal/custom callbacks, and image download.
+4. `rendering/`: camera, integrator, adaptive sampling, kernels, and rendering to
+   an owning `GpuImage`.
+5. `saving/`: CPU `Image` data and standalone BMP writing, without HIP dependencies.
+
+All directories above are under [src](src). [src/app/pipeline.h](src/app/pipeline.h)
+coordinates these stages; CLI loading/overrides live in `app/options.cpp`.
+`scene/` holds shared CPU/device data, `math/` the vector/random helpers.
+Domain code is grouped by topic: `surface/sphere.h`, `surface/torus.h`,
+`surface/text.h/.cpp`, `surface/mesh.h/.cpp`, `shader/metal.h`, `shader/glass.h`,
+`shader/phong.h`, and `texture/tiles.h`, `texture/wood.h`, `texture/marble.h`,
+`texture/mandelbrot.h`, `texture/julia.h`. Light samplers have their own `light/`
+directory. GPU dispatch uses plain data and functions, not virtual classes.
+
+Device implementation headers are compiled through one HIP translation unit per
+executable; `gpu/callbacks.h` supplies the two global symbols required by the
+linked HIP RT device library. Regression-only reference scenes live in
+[tests/reference_scene.h](tests/reference_scene.h), not in the production renderer.
+
 ## Requirements
 
 - CMake 3.25 or newer

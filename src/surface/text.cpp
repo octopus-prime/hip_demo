@@ -1,4 +1,4 @@
-#include "text_geometry.h"
+#include "surface/text.h"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H

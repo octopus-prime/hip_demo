@@ -1,4 +1,5 @@
-#include "scene_description.h"
+#include "building/scene_description.h"
+#include "parsing/parser.h"
 
 #include <cmath>
 #include <filesystem>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -30,6 +32,17 @@ void rejects(const std::string& text, const char* reason) {
         return;
     }
     throw std::runtime_error("invalid scene accepted");
+}
+
+scene_ast::Scene detached_ast(std::string text, std::string source) {
+    scene_ast::Scene copied;
+    {
+        const auto original = parse_scene_ast(text, source);
+        copied = original;
+    }
+    text.assign(text.size(), 'x');
+    source.assign(source.size(), 'x');
+    return scene_ast::Scene(std::move(copied));
 }
 }
 
@@ -76,6 +89,39 @@ text { font "font.ttf" value "BO S" size 1.5 depth 0.2 position [-1, 0.2, 0] mat
                 with_text.texts[0].size == 1.5f && with_text.texts[0].depth == 0.2f &&
                 with_text.texts[0].position.x == -1 && with_text.texts[0].material.kind == Material::metal,
                 "text grammar and conversion");
+        const auto owned_ast = detached_ast(text + text_object, "owned.hipscene");
+        require(owned_ast.text == text + text_object && owned_ast.source == "owned.hipscene" &&
+                owned_ast.text.substr(owned_ast.image.where, 5) == "image",
+                "AST owns source text, name, and stable source offsets after copy and move");
+        const auto owned_scene = build_scene_description(owned_ast);
+        require(owned_scene.output == "scene_test.bmp" && owned_scene.meshes.size() == 2 &&
+                owned_scene.meshes[0].file == "triangle_ascii.ply" &&
+                owned_scene.meshes[1].material.kind == Material::metal &&
+                owned_scene.texts.size() == 1 && owned_scene.texts[0].font == "font.ttf" &&
+                owned_scene.texts[0].value == "BO S" &&
+                owned_scene.texts[0].material.kind == Material::metal,
+                "copied and moved AST builds after caller input and original AST are destroyed");
+        const auto invalid_ast = detached_ast(
+            "hipscene 1\n"
+            "image { size [1, 1] output \"x.bmp\" }\n"
+            "sampling fixed { count 1 batch 1 }\n"
+            "camera { position [0, 0, 1] target [0, 0, 0] half_view_height 1 }\n"
+            "room { size [4, 4, 4] floor color [0, 0, 0] ceiling color [0, 0, 0]\n"
+            "back color [0, 0, 0] left color [0, 0, 0] right color [0, 0, 0] }\n"
+            "material red = diffuse [1, 0, 0]\n"
+            "  material red = diffuse [0, 1, 0]\n"
+            "light ceiling_rectangle { center [0, 0] size [1, 1] radiance [1, 1, 1] }\n",
+            "semantic.hipscene");
+        bool semantic_error = false;
+        try {
+            build_scene_description(invalid_ast);
+        } catch (const std::runtime_error& error) {
+            semantic_error = true;
+            require(std::string(error.what()) ==
+                        "semantic.hipscene:8:3: duplicate material 'red'",
+                    "semantic diagnostics retain exact source, line, and column after AST copy and move");
+        }
+        require(semantic_error, "semantic validation belongs to the build phase");
         const auto text_fixture = std::filesystem::absolute(argv[1]).parent_path() / "text.hipscene";
         const auto loaded_text = load_scene_description(text_fixture.string());
         require(loaded_text.texts[0].font ==

@@ -1,4 +1,10 @@
-#include "hiprt_scene.h"
+#include "gpu/callbacks.h"
+#include "gpu/scene.h"
+#include "gpu/device.h"
+#include "rendering/renderer.h"
+#include "reference_scene.h"
+
+using namespace hip_demo;
 
 namespace {
 

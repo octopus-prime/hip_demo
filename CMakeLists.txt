@@ -64,8 +64,9 @@ if(NOT HIP_VERSION_RESULT STREQUAL "0" OR NOT HIP_COMPILER_VERSION MATCHES "HIP 
         "Set HIPCC_EXECUTABLE to the HIP SDK 7.1 compiler or use a fresh build directory.")
 endif()
 set(HIP_ARCHITECTURE "" CACHE STRING "AMD GPU targets (semicolon-separated); empty detects local GPUs")
-set(HIP_DEMO_SHARED_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer_common.h")
-set(HIPRT_SCENE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/hiprt_scene.h")
+file(GLOB_RECURSE HIP_DEMO_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.h")
 
 if(HIP_ARCHITECTURE)
     set(HIP_DEMO_ARCHITECTURES ${HIP_ARCHITECTURE})
@@ -110,7 +111,7 @@ file(CONFIGURE
     CONTENT "#define HIP_DEMO_ARCHITECTURES \"@HIP_DEMO_ARCHITECTURES@\"\n"
     @ONLY
 )
-list(APPEND HIPCC_ARGUMENTS "-I${CMAKE_CURRENT_BINARY_DIR}")
+list(APPEND HIPCC_ARGUMENTS "-I${CMAKE_CURRENT_BINARY_DIR}" "-I${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 execute_process(
     COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" -print-resource-dir
@@ -221,25 +222,30 @@ add_custom_target(
 )
 add_library(rply STATIC third_party/rply/rply.c)
 target_include_directories(rply PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply")
-add_library(ply_mesh STATIC src/ply_mesh.cpp)
+add_library(ply_mesh STATIC src/surface/mesh.cpp)
+target_include_directories(ply_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(ply_mesh PRIVATE rply)
-add_library(scene_description STATIC src/scene_description.cpp)
+add_library(scene_description STATIC src/parsing/parser.cpp src/building/scene_description.cpp)
+target_include_directories(scene_description PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(scene_description PRIVATE Boost::headers)
 target_compile_definitions(scene_description PRIVATE
     NOMINMAX
     HIP_DEMO_SCENE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
-add_library(text_geometry STATIC src/text_geometry.cpp)
+add_library(text_geometry STATIC src/surface/text.cpp)
+target_include_directories(text_geometry PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(text_geometry PRIVATE freetype)
+add_library(app_support STATIC src/app/options.cpp src/saving/bmp.cpp)
+target_link_libraries(app_support PUBLIC scene_description)
 add_custom_command(TARGET hiprt_runtime POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${freetype_SOURCE_DIR}/docs/FTL.TXT"
         "${CMAKE_CURRENT_BINARY_DIR}/bin/FREETYPE-LICENSE.txt"
     VERBATIM)
 if(MSVC)
-    set_property(TARGET rply ply_mesh scene_description text_geometry PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    set_property(TARGET rply ply_mesh scene_description text_geometry app_support PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()
 
-function(add_hiprt_executable target)
-    set(source "${CMAKE_CURRENT_SOURCE_DIR}/src/${target}.hip")
+function(add_hiprt_executable target source_path)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/${source_path}")
     set(output "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${target}${CMAKE_EXECUTABLE_SUFFIX}")
     add_custom_command(
         OUTPUT "${output}"
@@ -250,11 +256,10 @@ function(add_hiprt_executable target)
             "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
             "$<TARGET_FILE:scene_description>" ${HIPRT_LINK_OPTIONS}
             "$<TARGET_FILE:text_geometry>" "$<TARGET_FILE:freetype>"
+            "$<TARGET_FILE:app_support>"
             -o "${output}"
-        DEPENDS "${source}" "${HIPRT_SCENE_SOURCE}" "${HIP_DEMO_SHARED_SOURCE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/ply_mesh.h"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/scene_description.h" ply_mesh rply scene_description
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/text_geometry.h" text_geometry freetype
+        DEPENDS "${source}" ${HIP_DEMO_HEADERS}
+            ply_mesh rply scene_description text_geometry freetype app_support
             "${CMAKE_CURRENT_BINARY_DIR}/hip_demo_architectures.h"
             "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
         VERBATIM
@@ -268,8 +273,8 @@ function(add_hiprt_executable target)
     add_dependencies(${target} hiprt_runtime)
 endfunction()
 
-add_hiprt_executable(hiprt_demo)
-add_hiprt_executable(hiprt_tests)
+add_hiprt_executable(hiprt_demo src/app/main.hip)
+add_hiprt_executable(hiprt_tests tests/hiprt_tests.hip)
 enable_testing()
 add_test(NAME hiprt_tests
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
@@ -299,6 +304,14 @@ if(MSVC)
 endif()
 add_test(NAME scene_description_tests COMMAND scene_description_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
+add_executable(app_support_tests tests/app_support_tests.cpp)
+target_link_libraries(app_support_tests PRIVATE app_support)
+if(MSVC)
+    set_property(TARGET app_support_tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endif()
+add_test(NAME app_support_tests COMMAND app_support_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene"
+    "${CMAKE_CURRENT_BINARY_DIR}/app-support-test.bmp")
 add_executable(text_geometry_tests tests/text_geometry_tests.cpp)
 target_include_directories(text_geometry_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(text_geometry_tests PRIVATE text_geometry)
