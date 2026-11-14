@@ -1,4 +1,5 @@
 #include "building/scene_description.h"
+#include "building/csg.h"
 #include "parsing/diagnostics.h"
 #include "parsing/parser.h"
 
@@ -86,6 +87,8 @@ SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
                     primitive.tilt_cosine = static_cast<float>(std::cos(angle));
                 }
                 scene.primitives.push_back(primitive);
+            } else if constexpr (std::is_same_v<T, Csg>) {
+                hip_demo::append_csg(scene, value, material_reference(value), errors);
             } else if constexpr (std::is_same_v<T, Text>) {
                 scene.texts.push_back({value.font, value.value, value.size, value.depth,
                                        value.position, material_reference(value)});

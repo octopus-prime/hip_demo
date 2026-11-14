@@ -4,6 +4,7 @@
 #include "rendering/renderer.h"
 #include "reference_scene.h"
 #include "analytic_intersection_tests.h"
+#include "csg_tests.h"
 
 using namespace hip_demo;
 
@@ -844,14 +845,14 @@ __global__ void check_text_probes(TraceScene scene, const TextProbe* probes, uns
 __global__ void check_mixed_text(TraceScene scene, TextProbe probe, unsigned int* failure) {
     unsigned int failed = 0;
     Hit hit{};
-    if (!hit_objects(probe.ray, hit, scene) || hit.object_id != probe.object_id + 1 ||
+    if (!hit_objects(probe.ray, hit, scene) || hit.object_id != probe.object_id + 2 ||
         hit.material != probe.material.kind || fabsf(hit.distance - probe.hit.distance) > 0.0001f) failed |= 1;
     if (!hit_objects({{-20, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 0 ||
         fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 2;
     const float3 a = mesh_points[0], b = mesh_points[2], c = mesh_points[1];
     const float3 normal = normalize(cross(b - a, c - a));
     const float3 center = (a + b + c) / 3;
-    if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 3 ||
+    if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 4 ||
         hit.material != Material::phong || fabsf(hit.distance - 0.25f) > 0.0001f) failed |= 4;
     const TextCurve cubic[2]{{{0, 0, 0, 2}, {0, 3, -3, 0}}, {{2, -2, 0, 0}, {0, 0, 0, 0}}};
     TextGlyph glyph;
@@ -861,6 +862,8 @@ __global__ void check_mixed_text(TraceScene scene, TextProbe probe, unsigned int
     TextIntersection curved_hit{};
     if (!intersect_text(glyph, cubic, {0.25f, 2, 0.25f}, {0, -1, 0}, 0.001f, 100, curved_hit) ||
         fabsf(curved_hit.distance - 1.25f) > 0.0001f) failed |= 8;
+    if (!hit_objects({{-22, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 1 ||
+        hit.material != Material::phong || fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 16;
     *failure = failed;
 }
 
@@ -937,6 +940,9 @@ void check_text_scene(int device, const char* font) {
     sphere.center = {-20, 1, -20};
     sphere.radius = 0.5f;
     description.primitives.push_back(sphere);
+    sphere.center.x = -22;
+    description.csg_leaves.push_back({sphere, csg_inside, csg_outside});
+    description.csgs.push_back({0, 1, 0, {{0.2f, 0.4f, 0.8f}, Material::phong, 0}});
     SceneMesh crystal;
     crystal.kind = SceneMeshKind::crystal;
     description.meshes.push_back(crystal);
@@ -950,6 +956,8 @@ void check_text_scene(int device, const char* font) {
     if (mixed_failure) throw std::runtime_error("Mixed text scene failed (flags " + std::to_string(mixed_failure) + ")");
     description.primitives.clear();
     description.meshes.clear();
+    description.csgs.clear();
+    description.csg_leaves.clear();
     description.texts[0].value = "   ";
     description.texts.resize(1);
     const HiprtScene spaces(device, description);
@@ -995,7 +1003,10 @@ int main(int argc, char** argv) {
             if (y_vertices.size() != 3 || z_vertices.size() != y_vertices.size()) {
                 throw std::runtime_error("PLY orientation produced incorrect vertex count");
             }
-            if (argc == 5) check_description(device.id, argv[4]);
+            if (argc == 5) {
+                check_description(device.id, argv[4]);
+                run_csg_tests(device.id, std::filesystem::path(argv[4]).parent_path());
+            }
             for (std::size_t index = 0; index < y_vertices.size(); ++index) {
                 const float4 y = y_vertices[index], z = z_vertices[index];
                 if (y.x != z.x || y.y != z.y || y.z != z.z) {

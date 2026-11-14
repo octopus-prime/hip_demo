@@ -37,8 +37,11 @@ __device__ inline bool hit_custom_objects(const Ray& ray, Hit& closest_hit, Trac
         if (result.primID < scene.primitive_count) {
             candidate.object_id = result.primID;
             set_material(candidate, scene.primitives[result.primID].material);
+        } else if (result.primID - scene.primitive_count < scene.csg_count) {
+            candidate.object_id = result.primID;
+            set_material(candidate, scene.csgs[result.primID - scene.primitive_count].material);
         } else {
-            const auto& glyph = scene.glyphs[result.primID - scene.primitive_count];
+            const auto& glyph = scene.glyphs[result.primID - scene.primitive_count - scene.csg_count];
             candidate.object_id = glyph.object_id;
             set_material(candidate, glyph.material);
         }

@@ -5,12 +5,16 @@
 
 namespace hip_demo {
 
-__device__ inline bool hit_sphere(const Ray& ray, float3 center, float radius, float maximum_distance, Hit& hit) {
+__device__ inline PolynomialRoots sphere_roots(const Ray& ray, float3 center, float radius) {
     const float3 offset = ray.origin - center;
     const float a = dot(ray.direction, ray.direction);
     const float b = 2.0f * dot(offset, ray.direction);
     const float c = dot(offset, offset) - radius * radius;
-    const auto roots = quadratic_roots(a, b, c);
+    return quadratic_roots(a, b, c);
+}
+
+__device__ inline bool hit_sphere(const Ray& ray, float3 center, float radius, float maximum_distance, Hit& hit) {
+    const auto roots = sphere_roots(ray, center, radius);
     if (roots.count == 0) return false;
     float distance = roots.values[0];
     if (distance < 0.001f || distance >= maximum_distance) {

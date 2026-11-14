@@ -117,6 +117,31 @@ text { font "font.ttf" value "BO S" size 1.5 depth 0.2 position [-1, 0.2, 0] mat
                     "semantic diagnostics retain exact source, line, and column after AST copy and move");
         }
         require(semantic_error, "semantic validation belongs to the build phase");
+        const std::string csg = R"(
+csg {
+    material blue
+    difference {
+        union {
+            sphere { center [0, 1, 0] radius 1 }
+            torus { center [0, 1, 0] major_radius 1 minor_radius 0.2 tilt_x 90 }
+        }
+        sphere { center [0, 1, 1] radius 0.7 }
+    }
+}
+)";
+        const auto csg_scene = build_scene_description(detached_ast(text + csg, "csg.hipscene"));
+        require(csg_scene.csgs.size() == 1 && csg_scene.csg_leaves.size() == 3 &&
+                csg_scene.csgs[0].material.kind == Material::metal &&
+                csg_scene.csgs[0].leaf_count == 3, "nested CSG AST survives source ownership changes");
+        rejects(text + replace(csg, "material blue", "material missing"), "unknown material");
+        rejects(text + replace(csg, "minor_radius 0.2", "minor_radius 1.2"), "minor_radius");
+        rejects(text + replace(csg, "radius 0.7", "radius 0"), "positive");
+        rejects(text + replace(csg, "difference {", "unknown {"), "CSG");
+        rejects(text + replace(csg, "        sphere { center [0, 1, 1] radius 0.7 }", ""), "CSG");
+        const auto demo = load_scene_description(
+            (std::filesystem::path(builtin_scene_path(false)).parent_path() / "csg.hipscene").string());
+        require(demo.csgs.size() == 4 && demo.csg_leaves.size() == 9 &&
+                demo.meshes.empty() && demo.texts.empty(), "CSG demo is self-contained");
         const auto text_fixture = std::filesystem::absolute(argv[1]).parent_path() / "text.hipscene";
         const auto loaded_text = load_scene_description(text_fixture.string());
         require(loaded_text.texts[0].font ==

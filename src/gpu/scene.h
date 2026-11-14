@@ -46,9 +46,19 @@ public:
 
         const auto object_count = static_cast<unsigned int>(prepared.primitives.size());
         primitive_count_ = object_count;
+        csg_count_ = static_cast<unsigned int>(prepared.csgs.size());
         const auto& text = prepared.text;
         const auto& bounds = prepared.bounds;
-        const auto custom_count = object_count + static_cast<unsigned int>(text.glyphs.size());
+        const auto custom_count = object_count + csg_count_ + static_cast<unsigned int>(text.glyphs.size());
+        if (csg_count_ != 0) {
+            csgs_ = allocate_device<SceneCsg>(prepared.csgs.size(), "Allocating CSG objects");
+            csg_leaves_ = allocate_device<SceneCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG leaves");
+            check_hip(hipMemcpy(csgs_.get(), prepared.csgs.data(), prepared.csgs.size() * sizeof(SceneCsg),
+                               hipMemcpyHostToDevice), "Uploading CSG objects");
+            check_hip(hipMemcpy(csg_leaves_.get(), prepared.csg_leaves.data(),
+                               prepared.csg_leaves.size() * sizeof(SceneCsgLeaf), hipMemcpyHostToDevice),
+                      "Uploading CSG leaves");
+        }
         if (object_count != 0) {
             primitives_ = allocate_device<ScenePrimitive>(object_count, "Allocating scene primitives");
             check_hip(hipMemcpy(primitives_.get(), prepared.primitives.data(),
@@ -98,7 +108,8 @@ public:
             hiprtFuncDataSet function_data{};
             primitive_data_ = allocate_device<PrimitiveData>(1, "Allocating primitive dispatch data");
             const PrimitiveData data{primitives_.get(), object_count, text_glyphs_.get(), text_curves_.get(),
-                                     static_cast<unsigned int>(text.glyphs.size())};
+                                     static_cast<unsigned int>(text.glyphs.size()),
+                                     csgs_.get(), csg_leaves_.get(), csg_count_};
             check_hip(hipMemcpy(primitive_data_.get(), &data, sizeof(data), hipMemcpyHostToDevice),
                       "Uploading primitive dispatch data");
             function_data.intersectFuncData = primitive_data_.get();
@@ -150,13 +161,16 @@ public:
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
                 mesh_triangle_count_, cat_detail_start_, detail_, settings_.get(),
-                primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_};
+                primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_,
+                csgs_.get(), csg_count_};
     }
 
 private:
     HiprtContextOwner context_;
     std::unique_ptr<SceneSettings, HipBufferDeleter> settings_;
     std::unique_ptr<ScenePrimitive, HipBufferDeleter> primitives_;
+    std::unique_ptr<SceneCsg, HipBufferDeleter> csgs_;
+    std::unique_ptr<SceneCsgLeaf, HipBufferDeleter> csg_leaves_;
     std::unique_ptr<TextGlyph, HipBufferDeleter> text_glyphs_;
     std::unique_ptr<TextCurve, HipBufferDeleter> text_curves_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;
@@ -168,6 +182,7 @@ private:
     HiprtGeometryOwner mesh_;
     unsigned int mesh_triangle_count_ = 0;
     unsigned int primitive_count_ = 0;
+    unsigned int csg_count_ = 0;
     unsigned int cat_detail_start_ = 0;
     bool detail_ = false;
 };

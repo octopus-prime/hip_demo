@@ -1,0 +1,82 @@
+hipscene 1
+camera { position [0, 3, 12] target [0, 1, 0] half_view_height 0.4 }
+room {
+    size [30, 6, 10]
+    floor color [0.7, 0.7, 0.7]
+    ceiling color [0.7, 0.7, 0.7]
+    back color [0.7, 0.7, 0.7]
+    left color [0.7, 0.1, 0.1]
+    right color [0.1, 0.7, 0.1]
+}
+material blue = phong [0.1, 0.2, 0.9]
+light ceiling_rectangle { center [0, 0] size [3, 2] radiance [10, 10, 10] }
+sphere { center [10, 3, 3] radius 0.2 material blue }
+csg {
+    material blue
+    union {
+        sphere { center [-0.5, 1, 0] radius 1 }
+        sphere { center [0.5, 1, 0] radius 1 }
+    }
+}
+csg {
+    material blue
+    intersection {
+        sphere { center [3.5, 1, 0] radius 1 }
+        sphere { center [4.5, 1, 0] radius 1 }
+    }
+}
+csg {
+    material blue
+    difference {
+        sphere { center [8, 1, 0] radius 1 }
+        sphere { center [8, 1, 0] radius 0.5 }
+    }
+}
+csg {
+    material blue
+    difference {
+        sphere { center [12, 1, 0] radius 1 }
+        sphere { center [12, 1, 0] radius 1 }
+    }
+}
+csg {
+    material blue
+    difference {
+        torus { center [-4, 1, 0] major_radius 1 minor_radius 0.25 tilt_x 90 }
+        sphere { center [-3, 1, 0] radius 0.4 }
+    }
+}
+csg {
+    material blue
+    intersection {
+        union {
+            sphere { center [-8.5, 1, 0] radius 1 }
+            sphere { center [-7.5, 1, 0] radius 1 }
+        }
+        sphere { center [-8, 1, 0] radius 1.25 }
+    }
+}
+csg {
+    material blue
+    union {
+        sphere { center [0.5, 4, 0] radius 1 }
+        difference {
+            sphere { center [-0.1, 4, 0.2] radius 1 }
+            sphere { center [-0.1, 4, 0.2] radius 1 }
+        }
+    }
+}
+csg {
+    material blue
+    intersection {
+        sphere { center [0, 4, -5] radius 1 }
+        sphere { center [2, 4, -5] radius 1 }
+    }
+}
+csg {
+    material blue
+    union {
+        sphere { center [6, 4, -5] radius 1 }
+        sphere { center [8, 4, -5] radius 1 }
+    }
+}

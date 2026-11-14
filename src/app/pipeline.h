@@ -33,7 +33,8 @@ inline int run_demo(int argc, char** argv) {
         std::cout << "Rendering on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
         std::cout << "Scene: " << description.primitives.size() << " primitives, "
-                  << description.meshes.size() << " meshes, " << description.texts.size() << " text objects; "
+                  << description.meshes.size() << " meshes, " << description.texts.size() << " text objects, "
+                  << description.csgs.size() << " CSG objects; "
                   << (sampling.adaptive ? "up to " : "") << sampling.maximum
                   << " samples per pixel (" << (sampling.adaptive ? "adaptive" : "fixed") << ").\n";
         std::cout << "Preparing scene and GPU buffers...\n" << std::flush;

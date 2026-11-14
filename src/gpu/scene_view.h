@@ -14,6 +14,9 @@ struct PrimitiveData {
     const TextGlyph* glyphs;
     const TextCurve* curves;
     unsigned int glyph_count;
+    const SceneCsg* csgs;
+    const SceneCsgLeaf* csg_leaves;
+    unsigned int csg_count;
 };
 
 struct TraceScene {
@@ -29,6 +32,8 @@ struct TraceScene {
     const TriangleMaterial* triangle_materials;
     const TextGlyph* glyphs;
     unsigned int primitive_count;
+    const SceneCsg* csgs;
+    unsigned int csg_count;
 };
 
 }

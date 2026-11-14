@@ -19,6 +19,8 @@ struct PreparedScene {
     std::vector<float4> vertices;
     std::vector<TriangleMaterial> triangle_materials;
     unsigned int cat_detail_start = 0;
+    std::vector<SceneCsg> csgs;
+    std::vector<SceneCsgLeaf> csg_leaves;
 };
 
 }

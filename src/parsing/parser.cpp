@@ -75,7 +75,23 @@ struct Text {
 };
 
 using Light = std::variant<RectangleLight, TorusLight>;
-using Object = std::variant<Sphere, Torus, Mesh, Text, SceneMeshKind>;
+struct CsgNode {
+    Position where;
+    std::variant<Sphere, Torus> shape;
+    CsgOperation operation = CsgOperation::unite;
+    std::vector<CsgNode> children;
+};
+struct CsgBranch {
+    Position where;
+    CsgOperation operation;
+    std::vector<CsgNode> children;
+};
+struct Csg {
+    Position where;
+    std::string material;
+    CsgNode root;
+};
+using Object = std::variant<Sphere, Torus, Mesh, Text, Csg, SceneMeshKind>;
 
 struct ParsedScene {
     Camera camera;
@@ -158,6 +174,11 @@ bp::rule<struct torus_light_p_, TorusLight> torus_light_p = "torus light";
 bp::rule<struct light_p_, Light> light_p = "light";
 bp::rule<struct sphere_p_, Sphere> sphere_p = "sphere";
 bp::rule<struct torus_p_, Torus> torus_p = "torus";
+bp::rule<struct csg_sphere_p_, Sphere> csg_sphere_p = "CSG sphere";
+bp::rule<struct csg_torus_p_, Torus> csg_torus_p = "CSG torus";
+bp::rule<struct csg_branch_p_, CsgBranch> csg_branch_p = "binary CSG operation";
+bp::rule<struct csg_node_p_, CsgNode> csg_node_p = "CSG sphere, torus or operation";
+bp::rule<struct csg_p_, Csg> csg_p = "CSG object";
 bp::rule<struct mesh_up_p_, MeshUp> mesh_up_p = "mesh up (y or z)";
 bp::rule<struct mesh_p_, Mesh> mesh_p = "mesh";
 bp::rule<struct text_p_, Text> text_p = "extruded text";
@@ -231,6 +252,31 @@ auto torus_p_def = position_p >> keyword("torus") > '{'
     > keyword("center") > vector_p > keyword("major_radius") > positive_p
     > keyword("minor_radius") > positive_p > keyword("tilt_x") > scalar_p
     > keyword("material") > identifier_p > '}';
+auto csg_sphere_p_def = position_p >> keyword("sphere") > '{'
+    > keyword("center") > vector_p > keyword("radius") > positive_p > bp::attr(std::string{}) > '}';
+auto csg_torus_p_def = position_p >> keyword("torus") > '{'
+    > keyword("center") > vector_p > keyword("major_radius") > positive_p
+    > keyword("minor_radius") > positive_p > keyword("tilt_x") > scalar_p > bp::attr(std::string{}) > '}';
+auto csg_branch_p_def = position_p >> (
+    (keyword("union") >> bp::attr(CsgOperation::unite)) |
+    (keyword("intersection") >> bp::attr(CsgOperation::intersection)) |
+    (keyword("difference") >> bp::attr(CsgOperation::difference)))
+    > '{' > bp::repeat(2)[csg_node_p] > '}';
+auto csg_node_p_def =
+    csg_sphere_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_torus_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_branch_p[([](auto& context) {
+        auto& branch = bp::_attr(context);
+        bp::_val(context) = CsgNode{branch.where, Sphere{}, branch.operation, std::move(branch.children)};
+    })];
+auto csg_p_def = position_p >> keyword("csg") > '{'
+    > keyword("material") > identifier_p > csg_node_p > '}';
 auto mesh_up_p_def = (keyword("y") >> bp::attr(MeshUp::y)) | (keyword("z") >> bp::attr(MeshUp::z));
 auto mesh_p_def = position_p >> keyword("mesh") > '{'
     > keyword("file") > string_p > keyword("up") > mesh_up_p > keyword("fit") > dimensions_p
@@ -241,7 +287,7 @@ auto text_p_def = position_p >> keyword("text") > '{'
     > keyword("position") > vector_p > keyword("material") > identifier_p > '}';
 auto builtin_p_def = (keyword("cat") >> bp::attr(SceneMeshKind::cat)) |
                      (keyword("crystal") >> bp::attr(SceneMeshKind::crystal));
-auto object_p_def = sphere_p | torus_p | mesh_p | text_p | builtin_p;
+auto object_p_def = sphere_p | torus_p | mesh_p | text_p | csg_p | builtin_p;
 auto scene_p_def = keyword("hipscene") > keyword("1")
     > camera_p > room_p > *material_p > light_p > *object_p > bp::eoi;
 
@@ -250,6 +296,7 @@ BOOST_PARSER_DEFINE_RULES(
     dimensions_p, color_p, radiance_p, roughness_p,
     camera_p, surface_p, wood_p, marble_p, floor_p, ceiling_p, back_p, left_p, right_p, room_p,
     diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
+    csg_sphere_p, csg_torus_p, csg_branch_p, csg_node_p, csg_p,
     mesh_up_p, mesh_p, text_p, builtin_p, object_p, scene_p);
 
 }
@@ -262,6 +309,23 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
     }
     const auto offset = [&](Position where) {
         return static_cast<scene_ast::Position>(where - text.begin());
+    };
+    const auto convert_csg = [&](auto&& self, const CsgNode& node) -> scene_ast::CsgNode {
+        scene_ast::CsgNode result;
+        result.where = offset(node.where);
+        result.operation = node.operation;
+        if (node.children.empty()) {
+            result.shape = std::visit([&](const auto& shape) -> std::variant<scene_ast::Sphere, scene_ast::Torus> {
+                using T = std::decay_t<decltype(shape)>;
+                if constexpr (std::is_same_v<T, Sphere>)
+                    return scene_ast::Sphere{offset(shape.where), shape.center, shape.radius, {}};
+                else
+                    return scene_ast::Torus{offset(shape.where), shape.center, shape.major_radius,
+                        shape.minor_radius, shape.tilt_x, {}};
+            }, node.shape);
+        }
+        for (const auto& child : node.children) result.children.push_back(self(self, child));
+        return result;
     };
     scene_ast::Scene scene;
     scene.text = text;
@@ -296,6 +360,9 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
             } else if constexpr (std::is_same_v<T, Text>) {
                 return scene_ast::Text{offset(value.where), std::move(value.font), std::move(value.value),
                                         value.size, value.depth, value.position, std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, Csg>) {
+                return scene_ast::Csg{offset(value.where), std::move(value.material),
+                    convert_csg(convert_csg, value.root)};
             } else {
                 return value;
             }

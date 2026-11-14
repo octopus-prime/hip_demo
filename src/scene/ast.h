@@ -74,7 +74,20 @@ struct Text {
 };
 
 using Light = std::variant<RectangleLight, TorusLight>;
-using Object = std::variant<Sphere, Torus, Mesh, Text, SceneMeshKind>;
+struct CsgNode {
+    Position where;
+    std::variant<Sphere, Torus> shape;
+    CsgOperation operation = CsgOperation::unite;
+    std::vector<CsgNode> children;
+};
+
+struct Csg {
+    Position where;
+    std::string material;
+    CsgNode root;
+};
+
+using Object = std::variant<Sphere, Torus, Mesh, Text, Csg, SceneMeshKind>;
 
 struct Scene {
     Camera camera;

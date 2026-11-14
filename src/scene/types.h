@@ -51,6 +51,20 @@ struct ScenePrimitive {
 
 enum class SceneMeshKind { ply, cat, crystal };
 
+enum class CsgOperation { unite, intersection, difference };
+inline constexpr std::uint32_t csg_inside = ~std::uint32_t{0};
+inline constexpr std::uint32_t csg_outside = csg_inside - 1;
+
+struct SceneCsgLeaf {
+    ScenePrimitive shape;
+    std::uint32_t when_inside = csg_inside, when_outside = csg_outside;
+};
+
+struct SceneCsg {
+    std::uint32_t first_leaf = 0, leaf_count = 0, entry = 0;
+    SceneMaterial material;
+};
+
 struct SceneMesh {
     SceneMeshKind kind = SceneMeshKind::ply;
     std::string file;
@@ -72,4 +86,6 @@ struct SceneDescription {
     std::vector<ScenePrimitive> primitives;
     std::vector<SceneMesh> meshes;
     std::vector<SceneText> texts;
+    std::vector<SceneCsg> csgs;
+    std::vector<SceneCsgLeaf> csg_leaves;
 };

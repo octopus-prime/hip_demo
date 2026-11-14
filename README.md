@@ -1,7 +1,7 @@
 # HIP RT Demo
 
-A command-line GPU path tracer for AMD GPUs. It renders spheres, tori, PLY
-meshes and extruded text, with reflections, glass, glossy materials and
+A command-line GPU path tracer for AMD GPUs. It renders spheres, tori, CSG solids,
+PLY meshes and extruded text, with reflections, glass, glossy materials and
 procedural textures. Images are saved as **PNG or BMP**.
 
 **Scene files describe the scene. CLI options and render configs control how
@@ -155,12 +155,22 @@ not a guarantee of matching fixed-sample quality.
 | [Classic](scenes/classic.hipscene) | `--scene classic` | None. |
 | [Detail](scenes/detail.hipscene) | `--scene detail` | PLY mesh and a font. |
 | [Text](scenes/text.hipscene) | `--scene .\scenes\text.hipscene` | A font. |
+| [CSG](scenes/csg.hipscene) | `--scene .\scenes\csg.hipscene` | None. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
 crystal and a low-poly cat. Detail contains a luminous torus, mirror and glass
 spheres, an imported dragon, procedural room surfaces, and gold "HIP RT" lettering
 projecting out of the back wall. Text demonstrates extruded curved lettering
-with holes, reflections and shadows; it is not a preset alias.
+with holes, reflections and shadows. CSG shows a gold union of spheres (left),
+a blue intersection/lens (center), a copper sphere with a spherical cutout
+(right), and a green nested torus/sphere construction (back). Text and CSG
+are selected by file path, not preset aliases.
+
+From `build\bin`, render the CSG demo to PNG:
+
+```powershell
+.\hiprt_demo.exe --scene ..\..\scenes\csg.hipscene --output csg.png --width 1920 --height 1080 --samples 256
+```
 
 Detail refers to a separately downloaded dragon mesh. Edit its scene `mesh.file`
 to use your own asset. Detail and text refer to Windows Arial; on other systems,
@@ -195,13 +205,49 @@ escapes; Windows paths inside scene strings need escaped backslashes.
 
 Scenes control camera position/target/view size, room dimensions and surfaces,
 named diffuse/metal/glass/Phong materials, one rectangle or torus light, and any
-number of spheres, tori, PLY meshes and text objects. `cat` and `crystal` insert
+number of spheres, tori, CSG solids, PLY meshes and text objects. `cat` and `crystal` insert
 the supplied procedural models.
 
 For text, `value` is single-line UTF-8, `size` is the em size in scene units,
 `depth` is extrusion depth, and `position` is the baseline origin at the back cap.
 Text lies in XY and extrudes toward +Z. Complex-script shaping, ligatures and
 bidirectional layout are not supported.
+
+### CSG: union, intersection and difference
+
+A `csg` object combines closed spheres and tori without triangulation:
+
+```text
+csg {
+    material gold
+    difference {
+        union {
+            sphere { center [0, 1, 0] radius 1 }
+            torus { center [0, 1, 0] major_radius 1 minor_radius 0.25 tilt_x 90 }
+        }
+        sphere { center [0, 1.4, 0.8] radius 0.7 }
+    }
+}
+```
+
+Define `gold` as a named material earlier in the scene. Each `union`,
+`intersection` or `difference` takes **exactly two operands**, which may themselves
+be nested operations. `difference` subtracts the second operand from the first.
+All leaf coordinates are scene coordinates; there is no separate group transform.
+Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
+
+Set the material once on the `csg` object, not on its leaves. It also covers
+new cut surfaces, whose normals point out of the remaining solid.
+Meshes, text, room surfaces and lights cannot be CSG operands.
+
+HIP RT traverses conservative bounding boxes; custom GPU intersections combine
+analytic, single-precision sphere/torus boundaries. There is no sphere tracing.
+Tangencies and zero-volume contacts do not create solid intervals; identical
+subtractions are empty. Nearly coincident boundaries are grouped within
+`2 * float_epsilon * max(1, abs(ray_t))`, so sub-tolerance thin features can
+disappear. At edges where multiple surfaces meet, the selected normal is
+deterministic but not unique. Deep/large constructions cost more than simple
+primitives; bounding boxes are not tightened for individual Boolean operations.
 
 ### Migration from the previous CLI and scene format
 
