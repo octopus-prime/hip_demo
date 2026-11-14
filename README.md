@@ -70,6 +70,13 @@ when its estimated RGB sampling error is sufficiently low. It uses at least
 primary ray. The supplied maximum is always respected, even below these minima.
 The renderer reports the actual minimum, average and maximum sample counts.
 
+During rendering, a live `Rendering: 0% ... 100%` line updates after completed
+GPU batches, not just queued kernel launches. The percentage counts completed
+sample passes against the configured maximum; with adaptive sampling, it is
+not the percentage of converged pixels or an estimate of remaining time.
+Scene/GPU setup and image copying/BMP writing have separate status messages.
+Low CPU utilization while rendering is normal: the CPU waits for GPU work.
+
 Supply an output path and optionally a positive maximum sample count for a
 quicker preview:
 
@@ -85,8 +92,9 @@ For a fixed-sample comparison, add `--fixed` (also usable without a path):
 
 Adaptive sampling is a heuristic: rare light paths can be missed and stopping
 based on the same samples can introduce bias. It does not guarantee identical
-quality to a fixed-sample render. GPU render time includes adaptive sampling
-and sample-statistics collection, but not setup, image transfer or BMP writing.
+quality to a fixed-sample render. GPU render time is the sum of GPU batch times,
+including adaptive sampling and sample-statistics collection, but excluding
+progress output, setup, image transfer and BMP writing.
 
 ### PLY meshes
 

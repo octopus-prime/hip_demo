@@ -274,6 +274,12 @@ add_test(NAME hiprt_tests
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/small.hipscene")
 set_tests_properties(hiprt_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+add_test(NAME render_progress_tests COMMAND "${CMAKE_COMMAND}"
+    "-DRENDERER=${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_demo${CMAKE_EXECUTABLE_SUFFIX}"
+    "-DFIXTURES=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    "-DOUTPUT_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/render_progress_tests.cmake")
+set_tests_properties(render_progress_tests PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
 add_executable(ply_loader_tests tests/ply_loader_tests.cpp)
 target_include_directories(ply_loader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(ply_loader_tests PRIVATE ply_mesh)

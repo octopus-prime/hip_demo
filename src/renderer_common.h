@@ -993,6 +993,7 @@ void render_image(const SceneDescription& description) {
               << description.meshes.size() << " meshes, " << description.texts.size() << " text objects; "
               << (adaptive ? "up to " : "")
               << sample_count << " samples per pixel (" << (adaptive ? "adaptive" : "fixed") << ").\n";
+    std::cout << "Preparing scene and GPU buffers...\n" << std::flush;
 
     const std::size_t pixel_count = static_cast<std::size_t>(image_width) * image_height;
     std::unique_ptr<std::uint32_t, HipBufferDeleter> device_pixels;
@@ -1032,9 +1033,12 @@ void render_image(const SceneDescription& description) {
     };
     HipEvent start;
     HipEvent stop;
-    check_hip(hipEventRecord(start.value, nullptr), "Starting GPU render timer");
+    float render_milliseconds = 0.0f;
+    int last_progress = 0;
+    std::cout << "Rendering: 0% (0/" << sample_count << " sample passes)" << std::flush;
     for (int first_sample = 0; first_sample < sample_count;) {
         const int sample_end = first_sample + std::min(description.settings.sampling.batch, sample_count - first_sample);
+        check_hip(hipEventRecord(start.value, nullptr), "Starting GPU batch timer");
         if (adaptive) {
             hipLaunchKernelGGL(render_adaptive_kernel, grid_size, block_size, 0, 0, device_pixels.get(),
                                adaptive_states.get(), scene, image_width, image_height,
@@ -1045,18 +1049,25 @@ void render_image(const SceneDescription& description) {
                                first_sample, sample_end, sample_count);
         }
         check_hip(hipGetLastError(), "Launching the HIP renderer");
+        if (adaptive && sample_end == sample_count) {
+            hipLaunchKernelGGL(summarize_samples, dim3(static_cast<unsigned int>((pixel_count + 255) / 256)),
+                               dim3(256), 0, 0, adaptive_states.get(), pixel_count, device_statistics.get());
+            check_hip(hipGetLastError(), "Launching sample statistics");
+        }
+        check_hip(hipEventRecord(stop.value, nullptr), "Stopping GPU batch timer");
+        check_hip(hipEventSynchronize(stop.value), "Waiting for the HIP render batch");
+        float batch_milliseconds = 0.0f;
+        check_hip(hipEventElapsedTime(&batch_milliseconds, start.value, stop.value), "Reading GPU batch time");
+        render_milliseconds += batch_milliseconds;
         first_sample = sample_end;
+        const int progress = static_cast<int>(100ll * sample_end / sample_count);
+        if (progress != last_progress) {
+            std::cout << "\rRendering: " << progress << "% (" << sample_end << '/'
+                      << sample_count << " sample passes)" << std::flush;
+            last_progress = progress;
+        }
     }
-    if (adaptive) {
-        hipLaunchKernelGGL(summarize_samples, dim3(static_cast<unsigned int>((pixel_count + 255) / 256)),
-                           dim3(256), 0, 0, adaptive_states.get(), pixel_count, device_statistics.get());
-        check_hip(hipGetLastError(), "Launching sample statistics");
-    }
-    check_hip(hipEventRecord(stop.value, nullptr), "Stopping GPU render timer");
-    check_hip(hipEventSynchronize(stop.value), "Waiting for the HIP renderer");
-    float render_milliseconds = 0.0f;
-    check_hip(hipEventElapsedTime(&render_milliseconds, start.value, stop.value), "Reading GPU render time");
-    std::cout << "GPU render time: " << std::fixed << std::setprecision(3)
+    std::cout << "\nGPU render time: " << std::fixed << std::setprecision(3)
               << render_milliseconds / 1000.0f << " s\n";
     if (adaptive) {
         SampleStatistics statistics{};
@@ -1067,6 +1078,7 @@ void render_image(const SceneDescription& description) {
                   << ", max " << statistics.maximum << ".\n";
     }
 
+    std::cout << "Copying image to CPU and writing BMP...\n" << std::flush;
     std::vector<std::uint32_t> pixels(pixel_count);
     check_hip(
         hipMemcpy(pixels.data(), device_pixels.get(), pixel_count * sizeof(std::uint32_t),
@@ -1198,7 +1210,7 @@ int run_demo(int argc, char** argv) {
         render_image<SceneOwner>(description);
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "HIP RT demo failed: " << error.what() << '\n';
+        std::cerr << "\nHIP RT demo failed: " << error.what() << '\n';
         return 1;
     }
 }
