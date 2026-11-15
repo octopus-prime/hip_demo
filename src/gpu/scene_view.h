@@ -4,18 +4,18 @@
 #include <hiprt/hiprt.h>
 #include <hiprt/hiprt_device.h>
 #include "scene/types.h"
-#include "scene/geometry.h"
+#include "components/scene/prepared.h"
 
 namespace hip_demo {
 
 struct PrimitiveData {
-    const ScenePrimitive* objects;
+    const GpuPrimitive* objects;
     unsigned int count;
     const TextGlyph* glyphs;
     const TextCurve* curves;
     unsigned int glyph_count;
-    const SceneCsg* csgs;
-    const SceneCsgLeaf* csg_leaves;
+    const GpuCsg* csgs;
+    const GpuCsgLeaf* csg_leaves;
     unsigned int csg_count;
 };
 
@@ -26,14 +26,16 @@ struct TraceScene {
     const float4* mesh_vertices;
     unsigned int mesh_triangle_count;
     unsigned int cat_detail_start;
-    bool detail;
-    const SceneSettings* settings;
-    const ScenePrimitive* primitives;
+    const GpuSceneSettings* settings;
+    const GpuPrimitive* primitives;
     const TriangleMaterial* triangle_materials;
     const TextGlyph* glyphs;
     unsigned int primitive_count;
-    const SceneCsg* csgs;
+    const GpuCsg* csgs;
     unsigned int csg_count;
+    const GpuEmitter* emitters = nullptr;
+    unsigned int emitter_count = 0;
+    const EmitterTriangle* emitter_triangles = nullptr;
 };
 
 }

@@ -157,6 +157,8 @@ not a guarantee of matching fixed-sample quality.
 | [Text](scenes/text.hipscene) | `--scene .\scenes\text.hipscene` | A font. |
 | [CSG](scenes/csg.hipscene) | `--scene .\scenes\csg.hipscene` | None. |
 | [CSG text](scenes/csg_text.hipscene) | `--scene .\scenes\csg_text.hipscene` | A font. |
+| [Mesh light](scenes/mesh_light.hipscene) | `--scene .\scenes\mesh_light.hipscene` | None; original panel mesh included. |
+| [Dragon light](scenes/dragon_light.hipscene) | `--scene .\scenes\dragon_light.hipscene` | Same dragon PLY mesh as Detail. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
 crystal and a low-poly cat. Detail contains a luminous torus, mirror and glass
@@ -200,7 +202,7 @@ hipscene 1
 camera { ... }
 room { ... }
 material definitions
-one light
+optional legacy light block
 objects
 ```
 
@@ -214,9 +216,62 @@ semantic constraints are checked when building the renderer's scene model;
 errors identify the source file, line and column of the relevant scene block.
 
 Scenes control camera position/target/view size, room dimensions and surfaces,
-named diffuse/metal/glass/Phong materials, one rectangle or torus light, and any
-number of spheres, tori, CSG solids, PLY meshes and text objects. `cat` and `crystal` insert
+named diffuse/metal/glass/Phong/emissive materials, and any
+number of spheres, tori, rectangles, CSG solids, PLY meshes and text objects. `cat` and `crystal` insert
 the supplied procedural models.
+
+### Emissive objects and mesh lights
+
+Lights are ordinary objects with an emissive material. RGB values specify
+finite, nonnegative **radiance**, not reflectance; values above 1 are allowed:
+
+```text
+material lamp = emissive [16, 10, 5]
+mesh {
+    file "light_panel.ply"
+    up y
+    fit [3, 1, 2]
+    position [0, 4, 0]
+    material lamp
+}
+rectangle { center [0, 5, 0] width 2 depth 1 material lamp }
+```
+
+Rectangles lie in XZ and face downward. Meshes need not be closed: their triangle
+winding determines the emitting side. All emission is **one-sided**, including
+camera and reflected hits. Each object emits its own material's radiance.
+Multiple emitters and scenes without a legacy light block are supported.
+Existing `light ceiling_rectangle` and `light torus` blocks remain compatible;
+the builder translates them into rectangle/torus objects with emissive materials.
+The room ceiling itself no longer contains a special light region.
+
+Direct lighting samples rectangles, tori and meshes through references to the
+prepared geometry, without a second light-shape model. Mesh triangles are selected
+proportionally to their **final world-space area**, then sampled uniformly within
+the triangle. Degenerate triangles are skipped; wholly degenerate emissive meshes
+are rejected. PDFs include emitter selection; tilted tori use their geometry's
+transform and nonuniform angular-sampling PDF.
+
+Sphere, text and CSG emission remains visible through camera/BSDF rays, but these
+geometries do not yet have direct-light samplers and can converge more slowly.
+Direct-light samples and diffuse/Phong BSDF hits on sampled emitters are combined
+with **multiple importance sampling (MIS)** using the power heuristic. Both PDFs
+use solid angle, including emitter selection and the area-to-solid-angle Jacobian.
+Phong uses the full diffuse/specular mixture PDF and matching scattering weights.
+This avoids double counting while allowing BSDF sampling to efficiently find
+nearby emitting surfaces, such as the underside of the dragon's pedestal.
+Camera hits, existing metal/glass transport and unsampled emitters retain full
+emission contributions; the final bounce uses direct lighting without a competing
+BSDF continuation. MIS reduces sampling variance, not geometry detail, and does
+not clamp radiance or filter pixels. Difficult glass caustics can still converge
+slowly.
+
+Try the self-contained [mesh-light scene](scenes/mesh_light.hipscene), which combines
+a tilted, unequal-triangle panel with an emissive torus.
+The [dragon-light scene](scenes/dragon_light.hipscene) uses the Detail dragon as
+the only emitter, with warm-orange radiance and mirror/glass spheres alongside.
+Constant emission makes the dragon itself appear uniformly luminous rather
+than diffusely shaded; its silhouette, occlusion and reflections reveal the shape.
 
 For text, `value` is single-line UTF-8, `size` is the em size in scene units,
 `depth` is extrusion depth, and `position` is the baseline origin at the back cap.
@@ -248,7 +303,8 @@ Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
 
 Set the material once on the `csg` object, not on its leaves. It also covers
 new cut surfaces, whose normals point out of the remaining solid.
-Meshes, room surfaces and lights cannot be CSG operands.
+Meshes, rectangles and room surfaces cannot be CSG operands. A CSG object can
+itself use an emissive material.
 
 Text operands use the same font, value, size, depth and position fields as
 standalone text, but **omit the leaf material**:
@@ -371,6 +427,88 @@ and `FETCHCONTENT_SOURCE_DIR_ZLIB` to local source directories.
 
 On Linux/WSL, use the same build commands with SDK 7.1 and a compatible GPU
 environment; run `./build/bin/hiprt_demo` instead of the Windows executable.
+
+## Scene model and GPU representation
+
+The CPU scene uses standard graphics terminology:
+
+- **Object** combines a **Geometry** and a **Material**.
+- **Geometry** is a `std::variant` of sphere, torus, rectangle, mesh, extruded text and CSG.
+  Geometry contains no material parameters.
+- **Material** is a `std::variant` of diffuse, Phong, metal, glass and emissive
+  descriptions. Each alternative supplies parameters for its shader/BSDF code.
+- **Texture** supplies albedo or emitted radiance independently of the shader. Constant
+  colors and the existing procedural patterns are texture alternatives; metal
+  roughness remains a scalar.
+
+For example, using the types in [scene/types.h](src/scene/types.h):
+
+```cpp
+using namespace hip_demo;
+Object gold{
+    Sphere{{0, 1, 0}, 0.5f},
+    Metal{ConstantColor{{0.8f, 0.6f, 0.1f}}, 0.15f}
+};
+```
+
+Sphere and torus are value types with bounds and device intersection methods,
+not a virtual class hierarchy. Each type lives in its own
+[component](src/components), including [Scene](src/components/scene) and
+[Object](src/components/object):
+
+Components are grouped by domain: [geometry](src/components/geometry) contains
+sphere, torus, rectangle, mesh, text and CSG; [material](src/components/material) contains
+diffuse, Phong, metal, glass and emissive; [texture](src/components/texture)
+contains the texture alternatives; [light](src/components/light) contains
+legacy light-block parsing/building and rectangle/torus/mesh samplers. There is
+no separate CPU light-shape model. Rectangles lower to two mesh triangles.
+Domain composition files stay directly in the
+domain folder, with each alternative's files in a child folder. Namespaces
+mirror this hierarchy, for example `hip_demo::material::phong`.
+Scene, Object, camera, room and shared value components remain at the root.
+
+- `description.h`: owned AST data, with double-valued numeric parameters.
+- `parser.h`: Boost.Parser rules and definitions, in the component's
+  `parsing` namespace. [parser.cpp](src/parsing/parser.cpp) registers all rules
+  with one `BOOST_PARSER_DEFINE_RULES`; rule IDs share its namespace for ADL.
+- `builder.h`: semantic validation and conversion to the component model.
+- `model.h`: renderer values and device method declarations. Larger algorithms
+  live alongside them, such as `intersection.h`, `scattering.h` or `outline.cpp`.
+- `gpu_model.h` / `preparation.h`, where needed: buffer-facing payloads and
+  lowering of resource-owning values.
+
+For example, [sphere](src/components/geometry/sphere) owns its description, both ordinary
+and CSG grammar rules, validated builder, bounds and analytic intersections.
+`hip_demo::geometry::sphere::Model` is also available as `hip_demo::Sphere`; corresponding
+aliases keep the existing C++ object-construction API usable.
+Scene settings compose camera and room models and a typed light variant:
+use `scene.settings.camera.position` and `scene.settings.room.textures`.
+Scene and Object builders compose their child components rather than repeating
+their validation. Components without scene-file syntax need no parser rule.
+
+The pipeline is syntax AST -> validated CPU objects -> prepared GPU data.
+[prepare_scene](src/components/scene/preparation.h) lowers variants to explicitly tagged,
+trivially copyable [GPU payloads](src/gpu/types.h), compiles CSG trees into
+Boolean jump programs, and prepares mesh/font geometry. The GPU wire layout
+remains unchanged; resource-owning CPU variants are not copied to the device.
+[shader::visit](src/shader/visit.h) dispatches the existing GPU shader tag to
+concrete component shader types with `evaluate` and `scatter` methods and
+lighting traits. The integrator does not branch on individual shader IDs.
+This is a device-compatible tagged visitor, not device `std::visit`: the current
+Windows HIP/MSVC STL implementation reaches a host-only exception helper.
+Invalid shader tags trap instead of silently selecting a default shader.
+The visitor improves organization, not inherently dispatch cost or divergence.
+Intersection code determines
+geometry; traversal attaches the material and evaluates its textures before
+shader/BSDF evaluation. Geometric normals remain separate from texture-modified
+shading normals.
+
+Existing scene syntax and CSG root-material behavior are unchanged.
+Procedural material textures can be selected through the C++ scene model;
+the scene-file grammar still exposes them only for room walls. Existing
+procedural coordinate mappings are retained rather than adding a new UV API.
+GPU object IDs retain their grouped order: primitives, CSG roots, standalone
+text objects, then meshes; they are not indices into the CPU `objects` vector.
 
 ## Tests
 

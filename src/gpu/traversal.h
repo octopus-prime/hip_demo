@@ -1,13 +1,13 @@
 #pragma once
 
 #include "gpu/scene_view.h"
-#include "surface/room.h"
-#include "shader/room.h"
+#include "components/room/intersection.h"
+#include "components/room/shading.h"
 
 namespace hip_demo {
 
 __device__ inline bool hit_room(const Ray& ray, float maximum_distance, Hit& hit, bool detail = false,
-                                const SceneSettings* settings = nullptr) {
+                                const GpuSceneSettings* settings = nullptr) {
     int wall = 0;
     if (!intersect_room(ray, maximum_distance, hit, wall, settings)) {
         return false;
@@ -45,6 +45,7 @@ __device__ inline bool hit_custom_objects(const Ray& ray, Hit& closest_hit, Trac
             candidate.object_id = glyph.object_id;
             set_material(candidate, glyph.material);
         }
+        apply_texture(candidate, ray, scene.settings);
         closest_hit = candidate;
         found = true;
     }
@@ -68,6 +69,7 @@ __device__ inline bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene 
         const auto& triangle = scene.triangle_materials[result.primID];
         closest_hit.object_id = triangle.object_id;
         set_material(closest_hit, triangle.material);
+        apply_texture(closest_hit, ray, scene.settings);
         found = true;
     }
     return found;
@@ -77,7 +79,7 @@ __device__ inline bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene sc
     bool found = hit_objects(ray, closest_hit, scene);
     const float closest_distance = found ? closest_hit.distance : 1.0e30f;
     Hit candidate{};
-    if (hit_room(ray, closest_distance, candidate, scene.detail, scene.settings)) {
+    if (hit_room(ray, closest_distance, candidate, false, scene.settings)) {
         closest_hit = candidate;
         found = true;
     }

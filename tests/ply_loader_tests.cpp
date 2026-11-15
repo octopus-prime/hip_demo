@@ -1,4 +1,4 @@
-#include "surface/mesh.h"
+#include "components/geometry/mesh/loading.h"
 
 #include <algorithm>
 #include <array>

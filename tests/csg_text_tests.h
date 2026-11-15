@@ -1,11 +1,12 @@
 #pragma once
 
-#include "building/csg.h"
-#include "surface/csg.h"
+#include "components/geometry/csg/preparation.h"
+#include "components/geometry/csg/builder.h"
+#include "components/geometry/csg/intersection.h"
 
 namespace hip_demo {
 
-__global__ void check_csg_text(TraceScene scene, const SceneCsg* objects, const SceneCsgLeaf* leaves,
+__global__ void check_csg_text(TraceScene scene, const GpuCsg* objects, const GpuCsgLeaf* leaves,
                                TextGeometryView text, unsigned int* failure) {
     struct Probe {
         unsigned int object;
@@ -86,7 +87,7 @@ __global__ void check_csg_text(TraceScene scene, const SceneCsg* objects, const 
     }
     Hit cut{};
     if (!hit_custom_objects({{20.5f, 1.5f, 2}, {0, 0, -1}}, cut, scene) ||
-        cut.object_id != 1 || cut.material != Material::phong || cut.albedo.z != 0.9f)
+        cut.object_id != 1 || cut.material != ShaderKind::phong || cut.albedo.z != 0.9f)
         failed |= 1u << 31;
     Hit cancelled{};
     bool usable = false;
@@ -100,7 +101,7 @@ __global__ void check_csg_text(TraceScene scene, const SceneCsg* objects, const 
     *failure = failed;
 }
 
-__global__ void check_csg_cached_rays(const SceneCsg* objects, const SceneCsgLeaf* leaves,
+__global__ void check_csg_cached_rays(const GpuCsg* objects, const GpuCsgLeaf* leaves,
                                      TextGeometryView text, unsigned int* failure) {
     const auto index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= 4096) return;
@@ -138,12 +139,13 @@ inline void run_csg_text_tests(int device) {
     const auto branch = [](CsgOperation operation, CsgNode left, CsgNode right) {
         return CsgNode{0, scene_ast::Sphere{}, operation, {std::move(left), std::move(right)}};
     };
-    SceneDescription description;
-    description.settings = load_scene_description(builtin_scene_path(false)).settings;
-    const SceneMaterial material{{0.1f, 0.2f, 0.9f}, Material::phong, 0};
+    PreparedScene prepared;
+    prepared.settings = prepare_settings(load_scene_description(builtin_scene_path(false)).settings);
+    std::vector<ExtrudedText> texts;
+    const GpuMaterial material{{0.1f, 0.2f, 0.9f}, ShaderKind::phong, 0};
     const SceneDiagnostics errors{"", "synthetic-text-csg"};
     const auto append = [&](CsgNode node) {
-        append_csg(description, scene_ast::Csg{0, {}, std::move(node)}, material, errors);
+        append_csg(prepared, hip_demo::geometry::csg::build(scene_ast::Csg{0, {}, std::move(node)}, SceneValues{errors}), material, texts);
     };
     append(branch(CsgOperation::unite, text_node(0), sphere_node(1.5, 1.5, 0.25, 0.6)));
     append(branch(CsgOperation::difference, text_node(20), sphere_node(20.5, 1.5, 0.4, 0.2)));
@@ -168,18 +170,14 @@ inline void run_csg_text_tests(int device) {
     append(branch(CsgOperation::unite, sphere_node(260.5, 1.875, 0.25, 0.625),
         branch(CsgOperation::difference, text_node(260), text_node(260))));
 
-    PreparedScene prepared;
-    prepared.settings = description.settings;
-    prepared.csgs = description.csgs;
-    prepared.csg_leaves = description.csg_leaves;
     prepared.text.curves = {
         {{0, 3, 0, 0}, {0, 0, 0, 0}}, {{3, 0, 0, 0}, {0, 3, 0, 0}},
         {{3, -3, 0, 0}, {3, 0, 0, 0}}, {{0, 0, 0, 0}, {3, -3, 0, 0}},
         {{1, 0, 0, 0}, {1, 1, 0, 0}}, {{1, 1, 0, 0}, {2, 0, 0, 0}},
         {{2, 0, 0, 0}, {2, -1, 0, 0}}, {{2, -1, 0, 0}, {1, 0, 0, 0}},
         {{0, 2, 0, 0}, {0, 4, -4, 0}}, {{2, -2, 0, 0}, {0, 0, 0, 0}}};
-    for (unsigned int i = 0; i < description.csg_texts.size(); ++i) {
-        const auto& source = description.csg_texts[i];
+    for (unsigned int i = 0; i < texts.size(); ++i) {
+        const auto& source = texts[i];
         const auto first = static_cast<std::uint32_t>(prepared.text.glyphs.size());
         const unsigned int count = source.value == " " ? 0 : source.value == "overflow" ? 20 :
             source.value == "glyph-limit" ? 33 : source.value == "three" ? 3 :

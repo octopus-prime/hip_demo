@@ -2,8 +2,8 @@
 
 #include "gpu/runtime.h"
 #include "gpu/scene_view.h"
-#include "building/geometry.h"
-#include "building/scene_description.h"
+#include "components/scene/preparation.h"
+#include "components/scene/builder.h"
 
 namespace hip_demo {
 
@@ -22,8 +22,7 @@ public:
     HiprtScene(int device, const SceneDescription& description)
         : HiprtScene(device, prepare_scene(description)) {}
 
-    HiprtScene(int device, PreparedScene prepared)
-        : detail_(prepared.settings.light.torus) {
+    HiprtScene(int device, PreparedScene prepared) {
         hipCtx_t hip_context = nullptr;
         // HIP RT 3.0 requires this handle; HIP 7.1 has no non-deprecated context getter.
 #pragma clang diagnostic push
@@ -40,8 +39,8 @@ public:
         check_hiprt(hiprtCreateContext(HIPRT_API_VERSION, context_input, context_.value),
                     "Creating the HIP RT context");
 
-        settings_ = allocate_device<SceneSettings>(1, "Allocating scene settings");
-        check_hip(hipMemcpy(settings_.get(), &prepared.settings, sizeof(SceneSettings), hipMemcpyHostToDevice),
+        settings_ = allocate_device<GpuSceneSettings>(1, "Allocating scene settings");
+        check_hip(hipMemcpy(settings_.get(), &prepared.settings, sizeof(GpuSceneSettings), hipMemcpyHostToDevice),
                   "Uploading scene settings");
 
         const auto object_count = static_cast<unsigned int>(prepared.primitives.size());
@@ -51,18 +50,18 @@ public:
         const auto& bounds = prepared.bounds;
         const auto custom_count = object_count + csg_count_ + prepared.glyph_count;
         if (csg_count_ != 0) {
-            csgs_ = allocate_device<SceneCsg>(prepared.csgs.size(), "Allocating CSG objects");
-            csg_leaves_ = allocate_device<SceneCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG leaves");
-            check_hip(hipMemcpy(csgs_.get(), prepared.csgs.data(), prepared.csgs.size() * sizeof(SceneCsg),
+            csgs_ = allocate_device<GpuCsg>(prepared.csgs.size(), "Allocating CSG objects");
+            csg_leaves_ = allocate_device<GpuCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG leaves");
+            check_hip(hipMemcpy(csgs_.get(), prepared.csgs.data(), prepared.csgs.size() * sizeof(GpuCsg),
                                hipMemcpyHostToDevice), "Uploading CSG objects");
             check_hip(hipMemcpy(csg_leaves_.get(), prepared.csg_leaves.data(),
-                               prepared.csg_leaves.size() * sizeof(SceneCsgLeaf), hipMemcpyHostToDevice),
+                               prepared.csg_leaves.size() * sizeof(GpuCsgLeaf), hipMemcpyHostToDevice),
                       "Uploading CSG leaves");
         }
         if (object_count != 0) {
-            primitives_ = allocate_device<ScenePrimitive>(object_count, "Allocating scene primitives");
+            primitives_ = allocate_device<GpuPrimitive>(object_count, "Allocating scene primitives");
             check_hip(hipMemcpy(primitives_.get(), prepared.primitives.data(),
-                                object_count * sizeof(ScenePrimitive), hipMemcpyHostToDevice),
+                                object_count * sizeof(GpuPrimitive), hipMemcpyHostToDevice),
                       "Uploading scene primitives");
         }
         if (!text.glyphs.empty()) {
@@ -117,6 +116,20 @@ public:
                         "Initializing HIP RT function table");
         }
 
+        emitter_count_ = static_cast<unsigned int>(prepared.emitters.size());
+        if (emitter_count_ != 0) {
+            emitters_ = allocate_device<GpuEmitter>(prepared.emitters.size(), "Allocating emitters");
+            check_hip(hipMemcpy(emitters_.get(), prepared.emitters.data(),
+                               prepared.emitters.size() * sizeof(GpuEmitter), hipMemcpyHostToDevice),
+                      "Uploading emitters");
+        }
+        if (!prepared.emitter_triangles.empty()) {
+            emitter_triangles_ = allocate_device<EmitterTriangle>(prepared.emitter_triangles.size(),
+                                                                  "Allocating emitter triangle distributions");
+            check_hip(hipMemcpy(emitter_triangles_.get(), prepared.emitter_triangles.data(),
+                               prepared.emitter_triangles.size() * sizeof(EmitterTriangle), hipMemcpyHostToDevice),
+                      "Uploading emitter triangle distributions");
+        }
         const auto& vertices = prepared.vertices;
         const auto& triangle_materials = prepared.triangle_materials;
         cat_detail_start_ = prepared.cat_detail_start;
@@ -160,17 +173,17 @@ public:
 
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
-                mesh_triangle_count_, cat_detail_start_, detail_, settings_.get(),
+                mesh_triangle_count_, cat_detail_start_, settings_.get(),
                 primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_,
-                csgs_.get(), csg_count_};
+                csgs_.get(), csg_count_, emitters_.get(), emitter_count_, emitter_triangles_.get()};
     }
 
 private:
     HiprtContextOwner context_;
-    std::unique_ptr<SceneSettings, HipBufferDeleter> settings_;
-    std::unique_ptr<ScenePrimitive, HipBufferDeleter> primitives_;
-    std::unique_ptr<SceneCsg, HipBufferDeleter> csgs_;
-    std::unique_ptr<SceneCsgLeaf, HipBufferDeleter> csg_leaves_;
+    std::unique_ptr<GpuSceneSettings, HipBufferDeleter> settings_;
+    std::unique_ptr<GpuPrimitive, HipBufferDeleter> primitives_;
+    std::unique_ptr<GpuCsg, HipBufferDeleter> csgs_;
+    std::unique_ptr<GpuCsgLeaf, HipBufferDeleter> csg_leaves_;
     std::unique_ptr<TextGlyph, HipBufferDeleter> text_glyphs_;
     std::unique_ptr<TextCurve, HipBufferDeleter> text_curves_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;
@@ -179,12 +192,14 @@ private:
     HiprtFunctionTableOwner functions_;
     std::unique_ptr<float4, HipBufferDeleter> mesh_vertices_;
     std::unique_ptr<TriangleMaterial, HipBufferDeleter> triangle_materials_;
+    std::unique_ptr<GpuEmitter, HipBufferDeleter> emitters_;
+    std::unique_ptr<EmitterTriangle, HipBufferDeleter> emitter_triangles_;
     HiprtGeometryOwner mesh_;
     unsigned int mesh_triangle_count_ = 0;
     unsigned int primitive_count_ = 0;
     unsigned int csg_count_ = 0;
     unsigned int cat_detail_start_ = 0;
-    bool detail_ = false;
+    unsigned int emitter_count_ = 0;
 };
 
 }

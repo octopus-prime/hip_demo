@@ -1,0 +1,36 @@
+hipscene 1
+
+camera {
+    position [0, 3.5, 8.5]
+    target [0.4, 0.6, 0.8]
+    half_view_height 0.32
+}
+room {
+    size [10, 4, 10]
+    floor color [0.65, 0.65, 0.65]
+    ceiling color [0.5, 0.5, 0.5]
+    back color [0.6, 0.6, 0.6]
+    left color [0.5, 0.5, 0.5]
+    right color [0.5, 0.5, 0.5]
+}
+material dragon = emissive [3, 1.2, 0.35]
+material mirror = metal [0.96, 0.96, 0.96] roughness 0
+material glass = glass [0.96, 0.98, 1]
+
+mesh {
+    file "../ply/Dragon-ply/Dragon-ply.ply"
+    up z
+    fit [1.85, 2.45, 1.55]
+    position [0, 0.02, -0.65]
+    material dragon
+}
+sphere {
+    center [-1.68, 0.72, -0.70]
+    radius 0.72
+    material mirror
+}
+sphere {
+    center [1.55, 0.72, 0.9]
+    radius 0.72
+    material glass
+}

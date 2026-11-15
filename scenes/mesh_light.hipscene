@@ -1,0 +1,34 @@
+hipscene 1
+camera {
+    position [0, 2.5, 9]
+    target [0, 2, 0]
+    half_view_height 0.41421356
+}
+room {
+    size [8, 6, 8]
+    floor color [0.75, 0.75, 0.75]
+    ceiling color [0.75, 0.75, 0.75]
+    back color [0.75, 0.75, 0.75]
+    left color [0.65, 0.15, 0.1]
+    right color [0.1, 0.3, 0.65]
+}
+material warm = emissive [16, 10, 5]
+material cool = emissive [3, 7, 16]
+material bronze = metal [0.8, 0.55, 0.25] roughness 0.1
+material blue = phong [0.1, 0.3, 0.7]
+mesh {
+    file "light_panel.ply"
+    up y
+    fit [3, 1, 2]
+    position [-1.5, 4.5, 0]
+    material warm
+}
+torus {
+    center [1.5, 4.5, 0]
+    major_radius 0.8
+    minor_radius 0.15
+    tilt_x 25
+    material cool
+}
+sphere { center [-1.2, 0.8, 0] radius 0.8 material bronze }
+sphere { center [1.2, 0.8, 0] radius 0.8 material blue }

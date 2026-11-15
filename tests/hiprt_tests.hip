@@ -6,6 +6,7 @@
 #include "analytic_intersection_tests.h"
 #include "csg_tests.h"
 #include "csg_text_tests.h"
+#include "emission_tests.h"
 
 using namespace hip_demo;
 
@@ -130,9 +131,11 @@ __global__ void check_mesh(TraceScene scene, unsigned int* failures) {
         const bool mesh_closest = expected && (!custom_hit || expected_distance < custom.distance);
         const bool front_face = dot(ray.direction, expected_normal) < 0.0f;
         const bool crystal = expected_primitive < mesh_triangles.size();
-        const Material material = crystal ? Material::phong : Material::diffuse;
+        const bool rectangle = expected_primitive >= scene.mesh_triangle_count - 2;
+        const ShaderKind material = rectangle ? ShaderKind::emissive :
+            crystal ? ShaderKind::phong : ShaderKind::diffuse;
         if (combined_hit != (expected || custom_hit) ||
-            (mesh_closest && (combined.object_id != scene_object_count + (crystal ? 0 : 1) ||
+            (mesh_closest && (combined.object_id != scene_object_count + (rectangle ? 2 : crystal ? 0 : 1) ||
                               combined.material != material ||
                               combined.front_face != front_face ||
                               !(fabsf(dot(combined.normal, expected_normal)) > 0.999f) ||
@@ -149,8 +152,8 @@ struct IntersectionCheck {
     bool actual_hit;
     float expected_distance;
     float actual_distance;
-    Material expected_material;
-    Material actual_material;
+    ShaderKind expected_material;
+    ShaderKind actual_material;
     bool expected_front_face;
     bool actual_front_face;
     unsigned int expected_object_id;
@@ -245,26 +248,28 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     Hit hit{};
     const float3 origin{0.0f, 2.0f, 0.0f};
     if (!hit_room({origin, {0.0f, -1.0f, 0.0f}}, 1.0e30f, hit) ||
-        hit.material != Material::diffuse || fabsf(hit.distance - 2.0f) > 0.0001f ||
+        hit.material != ShaderKind::diffuse || fabsf(hit.distance - 2.0f) > 0.0001f ||
         hit_room({origin, {0.0f, -1.0f, 0.0f}}, 1.9f, hit)) {
         failed |= 1;
     }
     if (!hit_room({origin, {-1.0f, 0.0f, 0.0f}}, 1.0e30f, hit) || hit.albedo.x <= hit.albedo.y ||
         !hit_room({origin, {1.0f, 0.0f, 0.0f}}, 1.0e30f, hit) || hit.albedo.y <= hit.albedo.x ||
-        !hit_room({origin, {0.0f, 0.0f, -1.0f}}, 1.0e30f, hit) || hit.material != Material::diffuse) {
+        !hit_room({origin, {0.0f, 0.0f, -1.0f}}, 1.0e30f, hit) || hit.material != ShaderKind::diffuse) {
         failed |= 2;
     }
-    if (!hit_room({origin, {0.0f, 1.0f, 0.0f}}, 1.0e30f, hit) ||
-        hit.material != Material::emissive || !hit.front_face ||
+    if (!hit_scene({origin, {0.0f, 1.0f, 0.0f}}, hit, scene) ||
+        hit.material != ShaderKind::emissive || !hit.front_face ||
         !hit_room({{2.0f, 2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}, 1.0e30f, hit) ||
-        hit.material != Material::diffuse ||
-        !hit_room({{0.0f, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f}}, 1.0e30f, hit) ||
-        hit.material != Material::emissive || hit.front_face ||
+        hit.material != ShaderKind::diffuse ||
+        !hit_scene({{0.0f, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f}}, hit, scene) ||
+        hit.material != ShaderKind::emissive || hit.front_face ||
+        !hit_room({origin, {0.0f, 1.0f, 0.0f}}, 1.0e30f, hit) ||
+        hit.material != ShaderKind::diffuse ||
         hit_room({origin, {0.0f, 0.0f, 1.0f}}, 1.0e30f, hit)) {
         failed |= 4;
     }
     if (!hit_scene({{-1.65f, 2.0f, -0.9f}, {0.0f, -1.0f, 0.0f}}, hit, scene) ||
-        hit.object_id != 0 || hit.material != Material::metal) {
+        hit.object_id != 0 || hit.material != ShaderKind::metal) {
         failed |= 8;
     }
     Random marking_random{123456789u};
@@ -289,7 +294,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     }
     float cosine_sum = 0.0f;
     for (int i = 0; i < 2048; ++i) {
-        const float3 direction = sample_phong_lobe({0.0f, 1.0f, 0.0f}, random);
+        const float3 direction = hip_demo::material::phong::sample_phong_lobe({0.0f, 1.0f, 0.0f}, random);
         if (!(direction.y >= 0.0f) || fabsf(dot(direction, direction) - 1.0f) > 0.0001f) {
             failed |= 16;
         }
@@ -309,7 +314,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
         const Ray camera_ray{camera_position, normalize(forward + u * right + v * up)};
         Hit sphere{}, reflected_hit{};
         if (!hit_scene(camera_ray, sphere, scene) || sphere.object_id != 4 ||
-            sphere.material != Material::metal || sphere.roughness != 0.0f) {
+            sphere.material != ShaderKind::metal || sphere.roughness != 0.0f) {
             failed |= 32;
             continue;
         }
@@ -325,7 +330,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     Hit entry{}, exit{}, behind{};
     float3 inside_direction{}, outside_direction{};
     if (!hit_scene(glass_ray, entry, scene) || entry.object_id != 6 ||
-        entry.material != Material::glass || !entry.front_face ||
+        entry.material != ShaderKind::glass || !entry.front_face ||
         !refract(glass_ray.direction, entry.normal, 1.0f / 1.5f, inside_direction) ||
         !hit_scene({entry.point - entry.normal * 0.002f, inside_direction}, exit, scene) ||
         exit.object_id != 6 || exit.front_face ||
@@ -344,7 +349,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
         const Ray ray{camera_position, normalize(target - camera_position)};
         Hit cat_hit{};
         if (!hit_scene(ray, cat_hit, scene) || cat_hit.object_id != scene_object_count + 1 ||
-            cat_hit.material != Material::diffuse || cat_hit.albedo.x < 0.5f) {
+            cat_hit.material != ShaderKind::diffuse || cat_hit.albedo.x < 0.5f) {
             failed |= 128;
         }
     }
@@ -353,7 +358,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
         const Ray ray{camera_position, normalize(target - camera_position)};
         Hit eye{};
         if (!hit_scene(ray, eye, scene) || eye.object_id != scene_object_count + 1 ||
-            eye.material != Material::diffuse || eye.albedo.x > 0.1f) {
+            eye.material != ShaderKind::diffuse || eye.albedo.x > 0.1f) {
             failed |= 128;
         }
     }
@@ -427,7 +432,55 @@ void check_adaptive_render(TraceScene scene) {
     }
 }
 
+__global__ void check_shader_visitor(unsigned int* failure) {
+    unsigned int failed = 0;
+    const ShaderKind kinds[]{ShaderKind::diffuse, ShaderKind::phong, ShaderKind::phong,
+                             ShaderKind::metal, ShaderKind::glass, ShaderKind::emissive};
+    for (unsigned int i = 0; i < 6; ++i) {
+        Hit hit{};
+        hit.normal = {0, 1, 0};
+        hit.front_face = true;
+        hit.albedo = {0.8f, 0.4f, 0.2f};
+        hit.roughness = 0.15f;
+        hit.material = kinds[i];
+        Ray actual{{}, normalize({0.3f, -1, 0.2f})}, expected = actual;
+        Random random{i == 2 ? 0x12345678u : 1u}, reference = random;
+        float3 throughput{1, 1, 1}, expected_throughput = throughput;
+        const float3 direction{0, 1, 0};
+        const auto compare = [&] __device__ (auto shader) {
+            const float3 evaluated = shader.evaluate(expected, hit, direction, 1);
+            const float3 visited = evaluate_scattering(actual, hit, direction, 1);
+            const bool expected_scatter = shader.scatter(expected, hit, reference, expected_throughput);
+            const bool actual_scatter = scatter(actual, hit, random, throughput);
+            const float3 direction_delta = expected.direction - actual.direction;
+            const float3 throughput_delta = expected_throughput - throughput;
+            const float3 evaluation_delta = evaluated - visited;
+            return expected_scatter == actual_scatter && random.state == reference.state &&
+                dot(direction_delta, direction_delta) < 1e-12f &&
+                dot(throughput_delta, throughput_delta) < 1e-12f && dot(evaluation_delta, evaluation_delta) < 1e-12f;
+        };
+        bool matches = false;
+        switch (kinds[i]) {
+        case ShaderKind::diffuse: matches = compare(hip_demo::material::diffuse::Shader{}); break;
+        case ShaderKind::phong: matches = compare(hip_demo::material::phong::Shader{}); break;
+        case ShaderKind::metal: matches = compare(hip_demo::material::metal::Shader{}); break;
+        case ShaderKind::glass: matches = compare(hip_demo::material::glass::Shader{}); break;
+        case ShaderKind::emissive: matches = compare(hip_demo::material::emissive::Shader{}); break;
+        }
+        if (!matches) failed |= 1u << i;
+    }
+    *failure = failed;
+}
+
 void run_checks(TraceScene scene) {
+    auto visitor_failure = allocate_device<unsigned int>(1, "Allocating shader visitor checks");
+    hipLaunchKernelGGL(check_shader_visitor, dim3(1), dim3(1), 0, 0, visitor_failure.get());
+    check_hip(hipGetLastError(), "Launching shader visitor checks");
+    unsigned int visitor_result = 0;
+    check_hip(hipMemcpy(&visitor_result, visitor_failure.get(), sizeof(visitor_result), hipMemcpyDeviceToHost),
+              "Reading shader visitor checks");
+    if (visitor_result != 0)
+        throw std::runtime_error("Shader visitor checks failed (flags " + std::to_string(visitor_result) + ")");
     auto adaptive_failure = allocate_device<unsigned int>(1, "Allocating adaptive sampling checks");
     hipLaunchKernelGGL(check_adaptive_sampling, dim3(1), dim3(1), 0, 0, adaptive_failure.get());
     check_hip(hipGetLastError(), "Launching adaptive sampling checks");
@@ -461,9 +514,9 @@ void run_checks(TraceScene scene) {
     std::array<IntersectionCheck, intersection_check_count> results{};
     check_hip(hipMemcpy(results.data(), device_results.get(), results.size() * sizeof(results[0]), hipMemcpyDeviceToHost),
               "Reading HIP RT intersection checks");
-    constexpr std::array<Material, scene_object_count> expected_materials{
-        Material::metal, Material::glass, Material::phong,
-        Material::phong, Material::metal, Material::diffuse, Material::glass};
+    constexpr std::array<ShaderKind, scene_object_count> expected_materials{
+        ShaderKind::metal, ShaderKind::glass, ShaderKind::phong,
+        ShaderKind::phong, ShaderKind::metal, ShaderKind::diffuse, ShaderKind::glass};
     for (std::size_t index = 0; index < results.size(); ++index) {
         const IntersectionCheck& result = results[index];
         if ((index < scene_object_count && (!result.expected_hit || result.expected_object_id != index ||
@@ -535,7 +588,7 @@ __global__ void check_ply_scene(TraceScene scene, unsigned int* failure) {
     Hit hit{};
     *failure = !mesh_hit.hasHit() || mesh_hit.primID != mesh_triangles.size() ||
         !hit_objects(ray, hit, scene) || hit.object_id != scene_object_count + 1 ||
-        hit.material != Material::diffuse || fabsf(hit.distance - 0.55f) > 0.001f;
+        hit.material != ShaderKind::diffuse || fabsf(hit.distance - 0.55f) > 0.001f;
 }
 
 __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
@@ -544,7 +597,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
         const float3 center = scene_object(index, true).center;
         const Ray ray{center + float3{0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}};
         Hit hit{};
-        const Material expected = index == 0 ? Material::metal : Material::glass;
+        const ShaderKind expected = index == 0 ? ShaderKind::metal : ShaderKind::glass;
         if (!hit_custom_objects(ray, hit, scene) || hit.object_id != index || hit.material != expected ||
             fabsf(hit.distance - (1.0f - detail_sphere_radius)) > 0.001f ||
             (index == 0 && hit.roughness != 0.0f)) {
@@ -555,14 +608,14 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
                          detail_torus_center.y - 0.5f, detail_torus_center.z}, {0.0f, 1.0f, 0.0f}};
     Hit torus{}, ceiling{};
     if (!hit_custom_objects(torus_ray, torus, scene) || torus.object_id != 2 ||
-        torus.material != Material::emissive || !torus.front_face ||
+        torus.material != ShaderKind::emissive || !torus.front_face ||
         !hit_room({{0.0f, 3.8f, 0.0f}, {0.0f, 1.0f, 0.0f}}, 1.0e30f, ceiling, true) ||
-        ceiling.material != Material::diffuse) {
+        ceiling.material != ShaderKind::diffuse) {
         failed |= 2;
     }
     Random random{123456789u};
     for (int i = 0; i < 128; ++i) {
-        const LightSample light = sample_torus_light(random);
+        const LightSample light = sample_light(random, scene);
         const float radial = sqrtf((light.point.x - detail_torus_center.x) *
                                     (light.point.x - detail_torus_center.x) +
                                     (light.point.z - detail_torus_center.z) *
@@ -570,7 +623,8 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
         if (fabsf(torus_distance(light.point, detail_torus_center,
                                  detail_torus_major_radius, detail_torus_minor_radius)) > 0.0001f ||
             fabsf(dot(light.normal, light.normal) - 1.0f) > 0.0001f ||
-            fabsf(light.area_weight - 4.0f * pi * pi * detail_torus_minor_radius * radial) > 0.0001f) {
+            fabsf(1 / light.area_pdf - 4.0f * pi * pi * detail_torus_minor_radius * radial) > 0.0001f ||
+            light.radiance.x != 24) {
             failed |= 4;
         }
     }
@@ -586,7 +640,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
                         normalize(glass_center + float3{0.15f, 0.12f, 0.0f} - detail_camera_position)};
     Hit entry{}, exit{}, behind{};
     float3 inside_direction{}, outside_direction{};
-    if (!hit_scene(glass_ray, entry, scene) || entry.material != Material::glass || !entry.front_face ||
+    if (!hit_scene(glass_ray, entry, scene) || entry.material != ShaderKind::glass || !entry.front_face ||
         !refract(glass_ray.direction, entry.normal, 1.0f / 1.5f, inside_direction) ||
         !hit_scene({entry.point - entry.normal * 0.002f, inside_direction}, exit, scene) ||
         exit.object_id != 1 || exit.front_face ||
@@ -602,9 +656,9 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
             const float3 target = mirror_center + float3{x * 0.075f, y * 0.075f, 0.0f};
             const Ray ray{detail_camera_position, normalize(target - detail_camera_position)};
             Hit mirror{}, reflected{};
-            if (hit_scene(ray, mirror, scene) && mirror.material == Material::metal && mirror.object_id == 0 &&
+            if (hit_scene(ray, mirror, scene) && mirror.material == ShaderKind::metal && mirror.object_id == 0 &&
                 hit_scene({mirror.point + mirror.normal * 0.002f, reflect(ray.direction, mirror.normal)},
-                          reflected, scene) && reflected.material == Material::emissive) {
+                          reflected, scene) && reflected.material == ShaderKind::emissive) {
                 reflected_light = true;
             }
         }
@@ -614,18 +668,18 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
     }
     Hit detail_mesh{};
     if (!hit_objects({{0.0f, 0.5f, 1.0f}, {0.0f, 0.0f, -1.0f}}, detail_mesh, scene) ||
-        detail_mesh.object_id != detail_object_count + 1 || detail_mesh.material != Material::phong ||
+        detail_mesh.object_id != detail_object_count + 1 || detail_mesh.material != ShaderKind::phong ||
         !(detail_mesh.albedo.z > detail_mesh.albedo.y && detail_mesh.albedo.y > detail_mesh.albedo.x)) {
         failed |= 512;
     }
     Hit lettering{}, lettering_side{}, bare_wall{};
     if (!hit_scene({{-1.52f, 3.0f, -2.0f}, {0, 0, -1}}, lettering, scene) ||
-        lettering.object_id != detail_object_count || lettering.material != Material::metal ||
+        lettering.object_id != detail_object_count || lettering.material != ShaderKind::metal ||
         fabsf(lettering.point.z + 2.3f) > 0.0001f || lettering.normal.z < 0.999f ||
         !hit_scene({{-1.64f, 3.0f, -2.4f}, {1, 0, 0}}, lettering_side, scene) ||
         lettering_side.object_id != detail_object_count || lettering_side.normal.x > -0.999f ||
         !hit_scene({{-2.2f, 3.0f, -2.0f}, {0, 0, -1}}, bare_wall, scene) ||
-        bare_wall.material != Material::diffuse || fabsf(bare_wall.point.z + 2.5f) > 0.0001f) {
+        bare_wall.material != ShaderKind::diffuse || fabsf(bare_wall.point.z + 2.5f) > 0.0001f) {
         failed |= 2048;
     }
     Hit tile{}, grout{}, positive_edge{}, negative_edge{}, corner{}, classic{}, underside{}, grazing{};
@@ -640,7 +694,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
         !hit_room(floor_ray(0.0f, 0.375f), 10.0f, classic) ||
         !hit_room({{0.020f, -1.0f, 0.375f}, {0.0f, 1.0f, 0.0f}}, 10.0f, underside, true) ||
         !hit_room({{1.020f, 0.010f, 0.375f}, normalize({-1.0f, -0.010f, 0.0f})}, 10.0f, grazing, true) ||
-        !tile.tiled_floor || !grout.tiled_floor || classic.tiled_floor ||
+        !tile.has_normal_map || !grout.has_normal_map || classic.has_normal_map ||
         tile.albedo.x <= grout.albedo.x || classic.albedo.x != 0.75f ||
         fabsf(tile.normal.x) > 0.0001f || fabsf(tile.normal.z) > 0.0001f ||
         positive_edge.normal.x >= -0.55f || negative_edge.normal.x <= 0.55f ||
@@ -665,7 +719,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
     }
     if (!hit_room(ceiling_ray, 10.0f, wood, true, scene.settings) ||
         !hit_room({{0.4f, 3.0f, 0.2f}, {0.0f, 1.0f, 0.0f}}, 10.0f, wood_repeat, true, scene.settings) ||
-        wood.material != Material::diffuse || wood.tiled_floor || wood.normal.y != -1.0f ||
+        wood.material != ShaderKind::diffuse || wood.has_normal_map || wood.normal.y != -1.0f ||
         wood.albedo.x != wood_repeat.albedo.x || wood_maximum - wood_minimum < 0.03f ||
         !(wood.albedo.x > wood.albedo.y && wood.albedo.y > wood.albedo.z) ||
         fabsf(wood.distance - 0.2f) > 0.0001f) {
@@ -678,7 +732,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
             Hit sample{};
             if (!hit_room({{-2.85f + x * 0.3f, 0.1f + y * 0.25f, 0.0f}, {0.0f, 0.0f, -1.0f}},
                           10.0f, sample, true, scene.settings) ||
-                sample.material != Material::diffuse || sample.tiled_floor || sample.normal.z != 1.0f ||
+                sample.material != ShaderKind::diffuse || sample.has_normal_map || sample.normal.z != 1.0f ||
                 !isfinite(sample.albedo.x) || !isfinite(sample.albedo.y) || !isfinite(sample.albedo.z) ||
                 sample.albedo.x < 0.0f || sample.albedo.y < 0.0f || sample.albedo.z < 0.0f ||
                 sample.albedo.x > 1.0f || sample.albedo.y > 1.0f || sample.albedo.z > 1.0f) {
@@ -715,7 +769,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
         !hit_room(side_ray(1.0f, 2.4f), 10.0f, julia_outside, true) ||
         !hit_room(side_ray(-1.0f, 0.0f), 10.0f, classic_left) ||
         !hit_room(side_ray(1.0f, 0.0f), 10.0f, classic_right) ||
-        mandelbrot_inside.material != Material::diffuse || julia_inside.material != Material::diffuse ||
+        mandelbrot_inside.material != ShaderKind::diffuse || julia_inside.material != ShaderKind::diffuse ||
         mandelbrot_inside.normal.x != 1.0f || julia_inside.normal.x != -1.0f ||
         mandelbrot_outside.albedo.x <= mandelbrot_inside.albedo.x ||
         julia_outside.albedo.y <= julia_inside.albedo.y ||
@@ -730,7 +784,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
 
 void check_loaded_ply(int device, const char* path, MeshUp up) {
     const HiprtScene loaded(device, path, up);
-    if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 1) {
+    if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 3) {
         throw std::runtime_error("Imported PLY did not replace the cat");
     }
     auto failure = allocate_device<unsigned int>(1, "Allocating PLY intersection check");
@@ -749,33 +803,34 @@ __global__ void check_described_scene(TraceScene scene, unsigned int* failure) {
     Hit hit{};
     if (!hit_custom_objects({{1, 3, -1}, {0, -1, 0}}, hit, scene) ||
         fabsf(hit.distance - 0.7f) > 0.001f || hit.albedo.x != 0.8f ||
-        hit.material != Material::diffuse) failed |= 1;
-    const auto& torus = scene.primitives[1];
+        hit.material != ShaderKind::diffuse) failed |= 1;
+    const auto& torus = scene.primitives[1].geometry.torus;
     const float3 origin = vector3(torus.center) +
         rotate_x({torus.major_radius, 0.5f, 0}, torus.tilt_sine, torus.tilt_cosine);
     const float3 direction = rotate_x({0, -1, 0}, torus.tilt_sine, torus.tilt_cosine);
     if (!hit_custom_objects({origin, direction}, hit, scene) || hit.object_id != 1 ||
-        hit.material != Material::metal || fabsf(hit.distance - 0.4f) > 0.003f) failed |= 2;
+        hit.material != ShaderKind::metal || fabsf(hit.distance - 0.4f) > 0.003f) failed |= 2;
     if (!hit_scene({{3, 1, 4}, {0, -1, 0}}, hit, scene) ||
         fabsf(hit.distance - 1) > 0.001f || hit.albedo.z != 0.4f) failed |= 4;
     if (!hit_scene({{1, 5, -2}, {0, 1, 0}}, hit, scene) ||
-        hit.material != Material::emissive || fabsf(hit.distance - 1) > 0.001f) failed |= 8;
+        hit.material != ShaderKind::emissive || fabsf(hit.distance - 1) > 0.001f ||
+        hit.emission.y != 4) failed |= 8;
     for (int index = 0; index < 2; ++index) {
         if (!hit_objects({{static_cast<float>(index * 2), 0.4f, 1}, {0, 0, -1}}, hit, scene) ||
             hit.object_id != static_cast<unsigned int>(index + 2) ||
-            hit.material != (index == 0 ? Material::diffuse : Material::metal) ||
+            hit.material != (index == 0 ? ShaderKind::diffuse : ShaderKind::metal) ||
             fabsf(hit.distance - 1) > 0.001f) failed |= 16;
     }
     if (scene.settings->camera_position.z != 12 || scene.settings->half_view_height != 0.4f ||
-        scene.settings->light.radiance.y != 4) failed |= 32;
+        scene.emitter_count != 1) failed |= 32;
     Hit ceiling{}, back{};
-    if (scene.settings->surfaces[1].kind != SurfaceKind::wood ||
-        scene.settings->surfaces[2].kind != SurfaceKind::marble) {
+    if (scene.settings->textures[1].kind != TextureKind::wood ||
+        scene.settings->textures[2].kind != TextureKind::marble) {
         failed |= 64;
     }
-    if (!hit_scene({{3, 5, 4}, {0, 1, 0}}, ceiling, scene) || ceiling.material != Material::diffuse ||
+    if (!hit_scene({{3, 5, 4}, {0, 1, 0}}, ceiling, scene) || ceiling.material != ShaderKind::diffuse ||
         fabsf(ceiling.albedo.x - wood_albedo({3, 4, 0}).x) > 0.001f) failed |= 128;
-    if (!hit_scene({{3, 3, 0}, {0, 0, -1}}, back, scene) || back.material != Material::diffuse ||
+    if (!hit_scene({{3, 3, 0}, {0, 0, -1}}, back, scene) || back.material != ShaderKind::diffuse ||
         fabsf(back.albedo.x - marble_albedo({3, 3, -5}).x) > 0.001f) failed |= 256;
     *failure = failed;
 }
@@ -792,17 +847,65 @@ void check_description(int device, const char* path) {
     if (result != 0) {
         throw std::runtime_error("Described scene check failed (flags " + std::to_string(result) + ")");
     }
-    description.primitives.clear();
+    std::erase_if(description.objects, [](const Object& object) {
+        return std::holds_alternative<Sphere>(object.geometry) || std::holds_alternative<Torus>(object.geometry);
+    });
     const HiprtScene mesh_only(device, description);
     if (mesh_only.scene().geometry || !mesh_only.scene().mesh) {
         throw std::runtime_error("Mesh-only scene built incorrect geometry");
     }
-    description.meshes.clear();
+    description.objects.clear();
     const HiprtScene room_only(device, description);
     if (room_only.scene().geometry || room_only.scene().mesh) {
         throw std::runtime_error("Room-only scene built incorrect geometry");
     }
     std::cout << "Scene description GPU checks passed.\n";
+}
+
+__global__ void check_object_materials(TraceScene scene, unsigned int* failure) {
+    unsigned int failed = 0;
+    for (unsigned int i = 0; i < 3; ++i) {
+        const Ray ray{{static_cast<float>(i * 3), 0, 2}, {0, 0, -1}};
+        Hit hit{}, geometry_hit{};
+        const auto& sphere = scene.primitives[i].geometry.sphere;
+        if (!sphere.intersect(ray, 0.001f, 4, geometry_hit) ||
+            !hit_objects(ray, hit, scene) || hit.object_id != i ||
+            fabsf(hit.distance - 1.5f) > 0.00001f ||
+            dot(hit.geometric_normal, {0, 0, 1}) < 0.99999f ||
+            dot(geometry_hit.normal, hit.geometric_normal) < 0.99999f) {
+            failed |= 1u << i;
+            continue;
+        }
+        if (i == 0 && (hit.material != ShaderKind::metal || hit.roughness != 0.15f ||
+                       hit.albedo.x != 0.8f || hit.has_normal_map)) failed |= 8;
+        if (i == 1 && (hit.material != ShaderKind::phong || hit.texture != TextureKind::wood ||
+                       fabsf(hit.albedo.x - wood_albedo(hit.point).x) > 0.00001f)) failed |= 16;
+        if (i == 2 && (hit.material != ShaderKind::diffuse || !hit.has_normal_map ||
+                       dot(hit.normal, hit.geometric_normal) <= 0 ||
+                       dot(hit.normal, ray.direction) >= 0)) failed |= 32;
+        Hit interval{};
+        if (!sphere.intersect(ray, 1.5f, 2, interval) || interval.distance != 1.5f ||
+            sphere.intersect(ray, 0.001f, 1.5f, interval) ||
+            !sphere.intersect(ray, 1.6f, 4, interval) || interval.distance != 2.5f) failed |= 64;
+    }
+    *failure = failed;
+}
+
+void check_material_scene(int device) {
+    auto description = load_scene_description(builtin_scene_path(false));
+    description.objects = {
+        {Sphere{{0, 0, 0}, 0.5f}, Metal{ConstantColor{{0.8f, 0.6f, 0.1f}}, 0.15f}},
+        {Sphere{{3, 0, 0}, 0.5f}, Phong{Wood{}}},
+        {Sphere{{6, 0, 0}, 0.5f}, Diffuse{Tiles{}}}
+    };
+    const HiprtScene scene(device, description);
+    auto failure = allocate_device<unsigned int>(1, "Allocating object/material check");
+    hipLaunchKernelGGL(check_object_materials, dim3(1), dim3(1), 0, 0, scene.scene(), failure.get());
+    check_hip(hipGetLastError(), "Launching object/material check");
+    unsigned int result = 0;
+    check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost),
+              "Reading object/material check");
+    if (result != 0) throw std::runtime_error("Object/material checks failed (flags " + std::to_string(result) + ")");
 }
 
 struct TextProbe {
@@ -811,7 +914,7 @@ struct TextProbe {
     bool expected = false;
     TextIntersection hit{};
     unsigned int object_id = 0;
-    SceneMaterial material;
+    GpuMaterial material;
 };
 
 __global__ void check_text_probes(TraceScene scene, const TextProbe* probes, unsigned int count,
@@ -854,7 +957,7 @@ __global__ void check_mixed_text(TraceScene scene, TextProbe probe, TextProbe cs
     const float3 normal = normalize(cross(b - a, c - a));
     const float3 center = (a + b + c) / 3;
     if (!hit_objects({center + 0.25f * normal, -normal}, hit, scene) || hit.object_id != 5 ||
-        hit.material != Material::phong || fabsf(hit.distance - 0.25f) > 0.0001f) failed |= 4;
+        hit.material != ShaderKind::phong || fabsf(hit.distance - 0.25f) > 0.0001f) failed |= 4;
     const TextCurve cubic[2]{{{0, 0, 0, 2}, {0, 3, -3, 0}}, {{2, -2, 0, 0}, {0, 0, 0, 0}}};
     TextGlyph glyph;
     glyph.depth = 0.5f;
@@ -864,23 +967,22 @@ __global__ void check_mixed_text(TraceScene scene, TextProbe probe, TextProbe cs
     if (!intersect_text(glyph, cubic, {0.25f, 2, 0.25f}, {0, -1, 0}, 0.001f, 100, curved_hit) ||
         fabsf(curved_hit.distance - 1.25f) > 0.0001f) failed |= 8;
     if (!hit_objects({{-22, 1, -18}, {0, 0, -1}}, hit, scene) || hit.object_id != 1 ||
-        hit.material != Material::phong || fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 16;
+        hit.material != ShaderKind::phong || fabsf(hit.distance - 1.5f) > 0.0001f) failed |= 16;
     if (!hit_objects(csg_probe.ray, hit, scene) || hit.object_id != 2 ||
-        hit.material != Material::phong || fabsf(hit.distance - csg_probe.hit.distance) > 0.0001f) failed |= 32;
+        hit.material != ShaderKind::phong || fabsf(hit.distance - csg_probe.hit.distance) > 0.0001f) failed |= 32;
     *failure = failed;
 }
 
 void check_text_scene(int device, const char* font) {
     auto description = load_scene_description(builtin_scene_path(false));
-    description.primitives.clear();
-    description.meshes.clear();
-    description.texts = {
-        {font, "BO S", 1.5f, 0.3f, {10, 0, 0}, {{0.8f, 0.2f, 0.1f}, Material::metal, 0}},
-        {font, "BO", 0.7f, 0.5f, {10, 3, -1}, {{0.2f, 0.5f, 0.9f}, Material::glass, 0}}
+    description.objects = {
+        {ExtrudedText{font, "BO S", 1.5f, 0.3f, {10, 0, 0}}, Metal{ConstantColor{{0.8f, 0.2f, 0.1f}}, 0}},
+        {ExtrudedText{font, "BO", 0.7f, 0.5f, {10, 3, -1}}, Glass{ConstantColor{{0.2f, 0.5f, 0.9f}}}}
     };
     TextGeometry geometry;
-    for (unsigned int index = 0; index < description.texts.size(); ++index) {
-        append_text_geometry(geometry, description.texts[index], index);
+    for (unsigned int index = 0; index < description.objects.size(); ++index) {
+        append_text_geometry(geometry, std::get<ExtrudedText>(description.objects[index].geometry), index,
+                             prepare_material(description.objects[index].material));
     }
     std::vector<TextProbe> probes;
     const auto append_probe = [&](Ray ray, float minimum = 0.001f, float maximum = 100) {
@@ -944,24 +1046,15 @@ void check_text_scene(int device, const char* font) {
     check_probes(scene.scene(), "Text");
     {
         auto csg_description = description;
-        csg_description.csg_texts = csg_description.texts;
-        csg_description.texts.clear();
-        for (unsigned int i = 0; i < csg_description.csg_texts.size(); ++i) {
-            SceneCsgLeaf leaf;
-            leaf.text = true;
-            leaf.text_index = i;
-            csg_description.csg_leaves.push_back(leaf);
-            csg_description.csgs.push_back({i, 1, i, csg_description.csg_texts[i].material});
-        }
+        for (auto& object : csg_description.objects)
+            object.geometry = Csg{CsgNode{std::get<ExtrudedText>(object.geometry)}};
         const auto prepared = prepare_scene(csg_description);
         if (prepared.glyph_count != 0 || !prepared.vertices.empty() || prepared.bounds.size() != 4)
             throw std::runtime_error("CSG operand glyphs must not become standalone objects or triangles");
         const HiprtScene csg_scene(device, prepared);
         check_probes(csg_scene.scene(), "CSG text");
-        csg_description.csg_texts[0].value = " ";
-        csg_description.csg_texts.resize(1);
-        csg_description.csgs.resize(1);
-        csg_description.csg_leaves.resize(1);
+        std::get<ExtrudedText>(std::get<Csg>(csg_description.objects[0].geometry).root.geometry).value = " ";
+        csg_description.objects.resize(1);
         const HiprtScene empty(device, csg_description);
         TextProbe empty_probe;
         empty_probe.ray = {{0, 0, 2}, {0, 0, -1}};
@@ -975,23 +1068,16 @@ void check_text_scene(int device, const char* font) {
                   "Reading empty CSG text check");
         if (result != 0) throw std::runtime_error("Whitespace CSG text must remain empty");
     }
-    ScenePrimitive sphere;
-    sphere.center = {-20, 1, -20};
-    sphere.radius = 0.5f;
-    description.primitives.push_back(sphere);
+    Sphere sphere{{-20, 1, -20}, 0.5f};
+    description.objects.push_back({sphere, Diffuse{}});
     sphere.center.x = -22;
-    description.csg_leaves.push_back({sphere, csg_inside, csg_outside});
-    description.csgs.push_back({0, 1, 0, {{0.2f, 0.4f, 0.8f}, Material::phong, 0}});
-    auto csg_text = description.texts[0];
+    description.objects.push_back({Csg{CsgNode{sphere}}, Phong{ConstantColor{{0.2f, 0.4f, 0.8f}}}});
+    auto csg_text = std::get<ExtrudedText>(description.objects[0].geometry);
     csg_text.position = {-30, 0, -20};
-    description.csg_texts.push_back(csg_text);
-    SceneCsgLeaf text_leaf;
-    text_leaf.text = true;
-    description.csg_leaves.push_back(text_leaf);
-    description.csgs.push_back({1, 1, 1, {{0.2f, 0.4f, 0.8f}, Material::phong, 0}});
-    SceneMesh crystal;
+    description.objects.push_back({Csg{CsgNode{csg_text}}, Phong{ConstantColor{{0.2f, 0.4f, 0.8f}}}});
+    Mesh crystal;
     crystal.kind = SceneMeshKind::crystal;
-    description.meshes.push_back(crystal);
+    description.objects.push_back({crystal, Phong{ConstantColor{{0.1f, 0.65f, 0.72f}}}});
     const HiprtScene mixed(device, description);
     const auto sample = std::find_if(probes.begin(), probes.end(), [](const TextProbe& p) { return p.expected; });
     auto csg_probe = *sample;
@@ -1003,13 +1089,8 @@ void check_text_scene(int device, const char* font) {
     check_hip(hipMemcpy(&mixed_failure, failures.get(), sizeof(mixed_failure), hipMemcpyDeviceToHost),
               "Reading mixed text checks");
     if (mixed_failure) throw std::runtime_error("Mixed text scene failed (flags " + std::to_string(mixed_failure) + ")");
-    description.primitives.clear();
-    description.meshes.clear();
-    description.csgs.clear();
-    description.csg_leaves.clear();
-    description.csg_texts.clear();
-    description.texts[0].value = "   ";
-    description.texts.resize(1);
+    description.objects.resize(1);
+    std::get<ExtrudedText>(description.objects[0].geometry).value = "   ";
     const HiprtScene spaces(device, description);
     if (spaces.scene().geometry || spaces.scene().mesh) throw std::runtime_error("Spaces must not create geometry");
     std::cout << "Text HIP RT checks passed (" << count << " rays, no triangulation).\n";
@@ -1042,6 +1123,8 @@ int main(int argc, char** argv) {
         if (!text_mode) {
             run_analytic_intersection_tests();
             run_csg_text_tests(device.id);
+            check_material_scene(device.id);
+            run_emission_tests(device.id);
         }
         if (text_mode) {
             check_text_scene(device.id, argv[2]);

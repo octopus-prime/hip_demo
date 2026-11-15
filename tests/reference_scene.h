@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/defaults.h"
-#include "surface/primitive.h"
+#include "components/object/intersection.h"
 
 namespace hip_demo {
 
@@ -48,42 +48,42 @@ __device__ inline void set_object_material(Hit& hit, unsigned int object_id, boo
     if (detail) {
         if (object_id == 0) {
             hit.albedo = {0.96f, 0.96f, 0.96f};
-            hit.material = Material::metal;
+            hit.material = ShaderKind::metal;
         } else if (object_id == 1) {
             hit.albedo = {0.96f, 0.98f, 1.0f};
-            hit.material = Material::glass;
+            hit.material = ShaderKind::glass;
         } else {
             hit.albedo = {1.0f, 1.0f, 1.0f};
-            hit.material = Material::emissive;
+            hit.material = ShaderKind::emissive;
         }
         return;
     }
     switch (object_id) {
     case 0:
         hit.albedo = {0.92f, 0.58f, 0.22f};
-        hit.material = Material::metal;
+        hit.material = ShaderKind::metal;
         hit.roughness = 0.08f;
         break;
     case 1:
     case 6:
         hit.albedo = {0.96f, 0.98f, 1.0f};
-        hit.material = Material::glass;
+        hit.material = ShaderKind::glass;
         break;
     case 2:
         hit.albedo = {0.12f, 0.28f, 0.82f};
-        hit.material = Material::phong;
+        hit.material = ShaderKind::phong;
         break;
     case 3:
         hit.albedo = {0.85f, 0.48f, 0.08f};
-        hit.material = Material::phong;
+        hit.material = ShaderKind::phong;
         break;
     case 4:
         hit.albedo = {0.96f, 0.96f, 0.96f};
-        hit.material = Material::metal;
+        hit.material = ShaderKind::metal;
         break;
     default:
         hit.albedo = {0.55f, 0.15f, 0.55f};
-        hit.material = Material::diffuse;
+        hit.material = ShaderKind::diffuse;
         break;
     }
 }
@@ -93,18 +93,20 @@ __device__ inline bool hit_primitive(const Ray& ray, unsigned int object_id, flo
     const SceneObject object = scene_object(object_id, detail);
     bool found;
     if (object.sphere) {
-        found = hit_sphere(ray, object.center, detail ? detail_sphere_radius : sphere_radius, maximum_distance, hit);
+        found = Sphere{{object.center.x, object.center.y, object.center.z},
+                       detail ? detail_sphere_radius : sphere_radius}.intersect(ray, 0.001f, maximum_distance, hit);
     } else {
         const Ray local_ray{
             rotate_x(ray.origin - object.center, -object.tilt_sine, object.tilt_cosine),
             rotate_x(ray.direction, -object.tilt_sine, object.tilt_cosine),
         };
-        found = hit_torus(local_ray, {0.0f, 0.0f, 0.0f}, maximum_distance, hit,
-                          detail ? detail_torus_major_radius : torus_major_radius,
-                          detail ? detail_torus_minor_radius : torus_minor_radius);
+        found = Torus{{}, detail ? detail_torus_major_radius : torus_major_radius,
+                      detail ? detail_torus_minor_radius : torus_minor_radius}
+            .intersect(local_ray, 0.001f, maximum_distance, hit);
         if (found) {
             hit.point = ray.origin + hit.distance * ray.direction;
             hit.normal = rotate_x(hit.normal, object.tilt_sine, object.tilt_cosine);
+            hit.geometric_normal = hit.normal;
         }
     }
     if (found) {
