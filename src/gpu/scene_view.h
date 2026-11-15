@@ -40,6 +40,7 @@ struct TraceScene {
     hiprtScene instance_scene = nullptr;
     const GpuInstance* instances = nullptr;
     const GpuPrototype* prototypes = nullptr;
+    const GpuMaterial* csg_materials = nullptr;
 };
 
 struct GpuPrototype {

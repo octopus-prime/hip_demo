@@ -8,6 +8,7 @@
 #include "components/geometry/hyperboloid/parser.h"
 #include "components/geometry/torus/parser.h"
 #include "components/geometry/text/parser.h"
+#include "components/geometry/box/parser.h"
 #include "components/geometry/csg/description.h"
 
 namespace hip_demo::parsing {
@@ -28,9 +29,10 @@ using hip_demo::parsing::Cylinder;
 using hip_demo::parsing::Cone;
 using hip_demo::parsing::Paraboloid;
 using hip_demo::parsing::Hyperboloid;
+using hip_demo::parsing::Box;
 struct NodeParsed {
     Position where;
-    std::variant<Sphere, Torus, Text, Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid> shape;
+    std::variant<Sphere, Torus, Text, Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid, Box> shape;
     CsgOperation operation = CsgOperation::unite;
     std::vector<NodeParsed> children;
 };
@@ -64,6 +66,10 @@ inline auto csg_branch_p_def = position_p >> (
     (bp::lit("difference") >> bp::attr(CsgOperation::difference)))
     > '{' > bp::repeat(2)[csg_node_p] > '}';
 inline auto csg_node_p_def =
+    csg_box_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
     csg_ellipsoid_p[([](auto& context) {
         const auto& shape = bp::_attr(context);
         bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};

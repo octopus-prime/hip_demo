@@ -24,10 +24,11 @@ inline PreparedScene prepare_scene(const SceneDescription& description) {
             using T = std::decay_t<decltype(geometry)>;
             if constexpr (std::is_same_v<T, Sphere> || std::is_same_v<T, Torus> ||
                           std::is_same_v<T, Ellipsoid> || std::is_same_v<T, Cylinder> ||
-                          std::is_same_v<T, Cone> || std::is_same_v<T, Paraboloid> || std::is_same_v<T, Hyperboloid>)
+                          std::is_same_v<T, Cone> || std::is_same_v<T, Paraboloid> || std::is_same_v<T, Hyperboloid> ||
+                          std::is_same_v<T, Box>)
                 compiled.primitives.push_back({prepare_geometry(geometry), prepare_material(object.material)});
             else if constexpr (std::is_same_v<T, Csg>)
-                append_csg(compiled, geometry, prepare_material(object.material), csg_texts);
+                append_csg(compiled, geometry, prepare_material(object.material), csg_texts, object.csg_materials);
             else if constexpr (std::is_same_v<T, ExtrudedText>) texts.push_back(&object);
             else if constexpr (std::is_same_v<T, Rectangle>) rectangles.push_back(&object);
             else {

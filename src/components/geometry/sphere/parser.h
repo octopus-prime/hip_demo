@@ -31,7 +31,7 @@ inline auto sphere_p_def = position_p >> bp::lit("sphere") > '{'
     > bp::lit("center") > vector_p > keyword("radius") > scalar_p
     > keyword("material") > identifier_p > '}';
 inline auto csg_sphere_p_def = position_p >> bp::lit("sphere") > '{'
-    > bp::lit("center") > vector_p > keyword("radius") > scalar_p > bp::attr(std::string{}) > '}';
+    > bp::lit("center") > vector_p > keyword("radius") > scalar_p > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using hip_demo::geometry::sphere::parsing::sphere_p;

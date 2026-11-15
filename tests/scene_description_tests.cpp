@@ -140,6 +140,31 @@ instance { prototype crystal_shape position [-2, 1, 0] }
         rejects_build(replace(instances, "material blue }", "material missing }"), "unknown material");
         rejects_build(replace(instances, "scale [2, 1, 0.5]", "scale [2, 0, 0.5]"), "dimensions");
         rejects_build(replace(instances, "rotation [30, 90, 45]", "rotation [1e50, 90, 45]"), "finite");
+        const std::string colored = R"(
+csg {
+    material red
+    difference {
+        intersection {
+            box { center [0, 1, 0] size [2, 2, 2] material red }
+            sphere { center [0, 1, 0] radius 1.5 material blue }
+        }
+        cylinder { center [0, 1, 0] radius 0.4 height 4 axis x material blue }
+    }
+}
+box { center [3, 1, 0] size [2, 2, 2] material red }
+cylinder { center [-3, 1, 0] radius 0.4 height 4 axis z material red }
+)";
+        const auto colored_scene = build_scene_description(detached_ast(text + colored, "colored.hipscene"));
+        const auto& colored_object = *objects<Csg>(colored_scene)[0];
+        require(colored_object.csg_materials.size() == 3 &&
+                std::holds_alternative<Metal>(*colored_object.csg_materials[1]) &&
+                geometry_of<Box>(colored_scene).size.x == 2 &&
+                std::get<Cylinder>(std::get<Csg>(colored_object.geometry).root.children[1].geometry).axis == Axis::x &&
+                geometry_of<Cylinder>(colored_scene).axis == Axis::z,
+                "CSG leaf bindings survive detached AST and cylinder axes preserve geometry/material separation");
+        rejects_build(text + replace(colored, "size [2, 2, 2]", "size [2, 0, 2]"), "dimensions");
+        rejects_build(text + replace(colored, "radius 1.5 material blue", "radius 1.5 material missing"), "unknown material");
+        rejects(text + replace(colored, "axis x", "axis invalid"), "expected");
         const std::string quadrics = R"(
 ellipsoid { center [0, 2, 0] radii [0.75, 1.5, 0.5] material red }
 cylinder { center [4, 2, 0] radius 1 height 2 material red }
@@ -194,15 +219,16 @@ csg { material red union {
                 "all new quadric shapes survive CSG parsing and building");
         rejects_build(text + replace(csg_quadrics, "axial_radius 1", "axial_radius 0"), "positive");
         rejects_build(text + replace(csg_quadrics, "radii [1, 2, 3]", "radii [1, 0, 3]"), "dimensions");
-        rejects(text + replace(csg_quadrics, "height 2 }", "height 2 material red }"), "}");
+        rejects_build(text + replace(csg_quadrics, "height 2 }", "height 2 material missing }"), "unknown material");
         const auto reject_gpu = [&](const auto& geometry, const char* reason) {
             try { (void)prepare_geometry(geometry); }
             catch (const std::runtime_error& error) {
-                require(std::string(error.what()).find(reason) != std::string::npos, "explicit GPU quadric validation error");
+                require(std::string(error.what()).find(reason) != std::string::npos, "explicit GPU geometry validation error");
                 return;
             }
             throw std::runtime_error("Invalid GPU quadric accepted");
         };
+        reject_gpu(Box{{1e20f, 0, 0}, {1, 1, 1}}, "Box bounds");
         reject_gpu(Ellipsoid{{}, {1, std::numeric_limits<float>::quiet_NaN(), 1}}, "finite");
         reject_gpu(Cylinder{{}, 1, 0}, "dimensions");
         reject_gpu(Sphere{{1e20f, 0, 0}, 1}, "bounds");
@@ -337,8 +363,8 @@ csg {
                 "CSG text AST owns its strings after copy and move");
         rejects_build(text + replace(text_solid, "depth 0.2", "depth 0"), "positive");
         rejects_build(text + replace(text_solid, "font.ttf", ""), "must not be empty");
-        rejects(text + replace(text_solid, "position [-1, 0.2, 0]", "position [-1, 0.2, 0] material blue"),
-                "expected '}'");
+        rejects_build(text + replace(text_solid, "position [-1, 0.2, 0]", "position [-1, 0.2, 0] material missing"),
+                "unknown material");
         require(geometry_of<ExtrudedText>(loaded_text).font ==
                     (text_fixture.parent_path() / "fonts" / "example.ttf").lexically_normal().string(),
                 "font paths resolve relative to scene");

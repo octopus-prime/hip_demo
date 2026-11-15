@@ -61,4 +61,6 @@ using value::parsing::vector2_p;
 using value::parsing::vector2_p_def;
 using value::parsing::vector_p;
 using value::parsing::vector_p_def;
+inline auto optional_material_reference_p =
+    (keyword("material") > identifier_p) | bp::attr(std::string{});
 }

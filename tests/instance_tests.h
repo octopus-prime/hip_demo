@@ -112,9 +112,11 @@ inline void run_instance_tests(int device) {
     description.instances.push_back({8, {{30, 5, 0}, {90, 0, 0}, {2, 0.5f, 1}}, std::nullopt});
     description.instances.push_back({8, {{36, 5, 0}, {90, 0, 0}, {2, 0.5f, 1}}, std::nullopt});
     description.instances.push_back({8, {{36, 5, -1}, {90, 0, 0}, {2, 0.5f, 1}}, std::nullopt});
+    description.prototypes.push_back({Box{}, base});
+    description.instances.push_back({11, {{-18, 35, 0}, {23, 37, 41}, {1.3f, 0.6f, 0.9f}}, std::nullopt});
     const auto prepared = prepare_scene(description);
     if (!prepared.vertices.empty() || prepared.prototypes[9].vertices.size() != mesh_triangles.size() * 3 ||
-        prepared.instances.size() != 28 || prepared.emitters.size() != 3 ||
+        prepared.instances.size() != 29 || prepared.emitters.size() != 3 ||
         prepared.prototypes[9].emitter_triangles.size() != mesh_triangles.size())
         throw std::runtime_error("Instances duplicated mesh storage or lost shared light distributions");
     const HiprtScene scene(device, prepared);

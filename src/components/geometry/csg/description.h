@@ -9,6 +9,7 @@
 #include "components/geometry/hyperboloid/description.h"
 #include "components/geometry/torus/description.h"
 #include "components/geometry/text/description.h"
+#include "components/geometry/box/description.h"
 #include "scene/common.h"
 #include <variant>
 #include <vector>
@@ -17,7 +18,7 @@ namespace hip_demo::geometry::csg {
 struct NodeDescription {
     scene_ast::Position where;
     std::variant<scene_ast::Sphere, scene_ast::Torus, scene_ast::Text, scene_ast::Ellipsoid,
-                 scene_ast::Cylinder, scene_ast::Cone, scene_ast::Paraboloid, scene_ast::Hyperboloid> shape;
+                 scene_ast::Cylinder, scene_ast::Cone, scene_ast::Paraboloid, scene_ast::Hyperboloid, scene_ast::Box> shape;
     CsgOperation operation = CsgOperation::unite;
     std::vector<NodeDescription> children;
 };

@@ -6,6 +6,15 @@ namespace hip_demo {
 
 __device__ inline PolynomialRoots csg_leaf_roots(const Ray& ray, const GpuGeometry& shape,
                                                 float minimum, float maximum) {
+    if (shape.kind == GeometryKind::box) {
+        const auto box = shape.box.intersections(ray, true);
+        PolynomialRoots roots;
+        if (box.found) {
+            roots.add(box.entry);
+            roots.add(box.exit);
+        }
+        return roots;
+    }
     if (shape.kind == GeometryKind::quadric) {
         const auto quadric = csg_quadric_boundaries(ray, shape.quadric);
         PolynomialRoots roots;
@@ -20,6 +29,10 @@ __device__ inline PolynomialRoots csg_leaf_roots(const Ray& ray, const GpuGeomet
 
 __device__ inline float3 csg_leaf_normal(const Ray& ray, const GpuGeometry& shape, float distance,
                                         float minimum, float maximum) {
+    if (shape.kind == GeometryKind::box) {
+        const auto box = shape.box.intersections(ray, true);
+        return distance == box.entry ? box.entry_normal : box.exit_normal;
+    }
     if (shape.kind == GeometryKind::quadric) {
         const auto boundaries = csg_quadric_boundaries(ray, shape.quadric);
         for (int i = 0; i < boundaries.count; ++i)
@@ -148,6 +161,7 @@ __device__ inline bool intersect_csg_uncached(const Ray& ray, const GpuCsg& obje
                 if ((dot(normal, ray.direction) < 0.0f) != after) normal = -normal;
                 hit.distance = selected_hit.distance;
                 hit.point = ray.origin + selected_hit.distance * ray.direction;
+                hit.csg_leaf = object.first_leaf + selected;
                 set_face_normal(hit, ray, normal);
                 return true;
             }

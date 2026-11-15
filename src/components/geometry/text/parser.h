@@ -35,7 +35,7 @@ inline auto text_p_def = position_p >> bp::lit("text") > '{'
 inline auto csg_text_p_def = position_p >> bp::lit("text") > '{'
     > bp::lit("font") > string_p > bp::lit("value") > string_p
     > keyword("size") > scalar_p > keyword("depth") > scalar_p
-    > bp::lit("position") > vector_p > bp::attr(std::string{}) > '}';
+    > bp::lit("position") > vector_p > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using hip_demo::geometry::text::parsing::text_p;

@@ -1,0 +1,30 @@
+hipscene 1
+camera { position [5, 4, 6] target [0, 1.5, 0] half_view_height 0.32 }
+room {
+    size [40, 18, 40]
+    floor color [0.45, 0.45, 0.45]
+    ceiling color [0.6, 0.6, 0.6]
+    back color [0.3, 0.3, 0.3]
+    left color [0.3, 0.3, 0.3]
+    right color [0.3, 0.3, 0.3]
+}
+material red = phong [0.8, 0.05, 0.05]
+material blue = phong [0.05, 0.15, 0.8]
+material green = phong [0.05, 0.65, 0.08]
+light ceiling_rectangle { center [0, 0] size [10, 8] radiance [20, 20, 20] }
+csg {
+    material red
+    difference {
+        intersection {
+            box { center [0, 1.5, 0] size [3, 3, 3] material red }
+            sphere { center [0, 1.5, 0] radius 1.95 material blue }
+        }
+        union {
+            cylinder { center [0, 1.5, 0] radius 0.9 height 6 axis x material green }
+            union {
+                cylinder { center [0, 1.5, 0] radius 0.9 height 6 axis y material green }
+                cylinder { center [0, 1.5, 0] radius 0.9 height 6 axis z material green }
+            }
+        }
+    }
+}

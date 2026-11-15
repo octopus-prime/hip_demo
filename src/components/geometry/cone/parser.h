@@ -20,7 +20,7 @@ inline auto cone_p_def = position_p >> bp::lit("cone") > '{'
     > keyword("material") > identifier_p > '}';
 inline auto csg_cone_p_def = position_p >> bp::lit("cone") > '{'
     > bp::lit("center") > vector_p > keyword("radius") > scalar_p > keyword("height") > scalar_p
-    > bp::attr(std::string{}) > '}';
+    > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using Cone = geometry::cone::parsing::Parsed;

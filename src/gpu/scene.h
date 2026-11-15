@@ -59,6 +59,14 @@ public:
             check_hip(hipMemcpy(csg_leaves_.get(), prepared.csg_leaves.data(),
                                prepared.csg_leaves.size() * sizeof(GpuCsgLeaf), hipMemcpyHostToDevice),
                       "Uploading CSG leaves");
+            if (!prepared.csg_materials.empty()) {
+                if (prepared.csg_materials.size() != prepared.csg_leaves.size())
+                    throw std::runtime_error("CSG material buffers must match its leaves");
+                csg_materials_ = allocate_device<GpuMaterial>(prepared.csg_materials.size(), "Allocating CSG surface materials");
+                check_hip(hipMemcpy(csg_materials_.get(), prepared.csg_materials.data(),
+                                   prepared.csg_materials.size() * sizeof(GpuMaterial), hipMemcpyHostToDevice),
+                          "Uploading CSG surface materials");
+            }
         }
         if (object_count != 0) {
             primitives_ = allocate_device<GpuPrimitive>(object_count, "Allocating scene primitives");
@@ -182,7 +190,7 @@ public:
                 mesh_triangle_count_, cat_detail_start_, settings_.get(),
                 primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_,
                 csgs_.get(), csg_count_, emitters_.get(), emitter_count_, emitter_triangles_.get(),
-                instance_scene_.value, instances_.get(), prototype_views_.get()};
+                instance_scene_.value, instances_.get(), prototype_views_.get(), csg_materials_.get()};
     }
 
 private:
@@ -276,6 +284,7 @@ private:
     std::unique_ptr<GpuPrimitive, HipBufferDeleter> primitives_;
     std::unique_ptr<GpuCsg, HipBufferDeleter> csgs_;
     std::unique_ptr<GpuCsgLeaf, HipBufferDeleter> csg_leaves_;
+    std::unique_ptr<GpuMaterial, HipBufferDeleter> csg_materials_;
     std::unique_ptr<TextGlyph, HipBufferDeleter> text_glyphs_;
     std::unique_ptr<TextCurve, HipBufferDeleter> text_curves_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;

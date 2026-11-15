@@ -20,7 +20,7 @@ inline auto hyperboloid_p_def = position_p >> bp::lit("hyperboloid") > '{'
     > keyword("height") > scalar_p > keyword("material") > identifier_p > '}';
 inline auto csg_hyperboloid_p_def = position_p >> bp::lit("hyperboloid") > '{'
     > bp::lit("center") > vector_p > keyword("radius") > scalar_p > keyword("axial_radius") > scalar_p
-    > keyword("height") > scalar_p > bp::attr(std::string{}) > '}';
+    > keyword("height") > scalar_p     > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using Hyperboloid = geometry::hyperboloid::parsing::Parsed;

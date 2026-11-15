@@ -1,6 +1,7 @@
 #pragma once
 
 #include "components/geometry/gpu_model.h"
+#include "components/geometry/box/builder.h"
 #include "components/geometry/sphere/builder.h"
 #include "components/geometry/ellipsoid/builder.h"
 #include "components/geometry/cylinder/builder.h"
@@ -10,6 +11,7 @@
 
 namespace hip_demo {
 inline GpuGeometry prepare_geometry(const Sphere& value) { return geometry::sphere::prepare(value); }
+inline GpuGeometry prepare_geometry(const Box& value) { return geometry::box::prepare(value); }
 inline GpuGeometry prepare_geometry(const Ellipsoid& value) { return geometry::ellipsoid::prepare(value); }
 inline GpuGeometry prepare_geometry(const Cylinder& value) { return geometry::cylinder::prepare(value); }
 inline GpuGeometry prepare_geometry(const Cone& value) { return geometry::cone::prepare(value); }

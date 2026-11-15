@@ -8,12 +8,13 @@
 #include "components/geometry/hyperboloid/model.h"
 #include "components/geometry/torus/model.h"
 #include "components/geometry/text/model.h"
+#include "components/geometry/box/model.h"
 #include <variant>
 #include <vector>
 
 namespace hip_demo::geometry::csg {
 struct Node {
-    std::variant<Sphere, Torus, ExtrudedText, Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid> geometry;
+    std::variant<Sphere, Torus, ExtrudedText, Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid, Box> geometry;
     CsgOperation operation = CsgOperation::unite;
     std::vector<Node> children;
 };

@@ -18,7 +18,7 @@ inline auto ellipsoid_p_def = position_p >> bp::lit("ellipsoid") > '{'
     > bp::lit("center") > vector_p > keyword("radii") > vector_p
     > keyword("material") > identifier_p > '}';
 inline auto csg_ellipsoid_p_def = position_p >> bp::lit("ellipsoid") > '{'
-    > bp::lit("center") > vector_p > keyword("radii") > vector_p > bp::attr(std::string{}) > '}';
+    > bp::lit("center") > vector_p > keyword("radii") > vector_p > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using Ellipsoid = geometry::ellipsoid::parsing::Parsed;

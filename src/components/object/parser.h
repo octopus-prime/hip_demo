@@ -27,7 +27,7 @@ using hip_demo::parsing::Csg;
 using hip_demo::parsing::Mesh;
 using Parsed = std::variant<Sphere, Torus, Mesh, Text, Csg, SceneMeshKind, hip_demo::parsing::Rectangle,
     hip_demo::parsing::Ellipsoid, hip_demo::parsing::Cylinder, hip_demo::parsing::Cone,
-    hip_demo::parsing::Paraboloid, hip_demo::parsing::Hyperboloid>;
+    hip_demo::parsing::Paraboloid, hip_demo::parsing::Hyperboloid, hip_demo::parsing::Box>;
 }
 namespace hip_demo::parsing {
 using Object = object::parsing::Parsed;
@@ -39,7 +39,7 @@ inline bp::rule<hip_demo::parsing::object_p_, Object> object_p = "object";
 inline auto builtin_p = (keyword("cat") >> bp::attr(SceneMeshKind::cat)) |
                      (keyword("crystal") >> bp::attr(SceneMeshKind::crystal));
 inline auto object_p_def = sphere_p | torus_p | mesh_p | text_p | csg_p | rectangle_p |
-    ellipsoid_p | cylinder_p | cone_p | paraboloid_p | hyperboloid_p | builtin_p;
+    ellipsoid_p | cylinder_p | cone_p | paraboloid_p | hyperboloid_p | box_p | builtin_p;
 }
 namespace hip_demo::parsing {
 using object::parsing::builtin_p;

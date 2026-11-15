@@ -164,6 +164,7 @@ the [visual reference](docs/visual-reference.md).
 | [Dragon light](scenes/dragon_light.hipscene) | `--scene .\scenes\dragon_light.hipscene` | Same dragon PLY mesh as Detail. |
 | [Quadrics](scenes/quadrics.hipscene) | `--scene .\scenes\quadrics.hipscene` | None. |
 | [CSG quadrics](scenes/csg_quadrics.hipscene) | `--scene .\scenes\csg_quadrics.hipscene` | None. |
+| [Colored CSG](scenes/csg_colored.hipscene) | `--scene .\scenes\csg_colored.hipscene` | None. |
 | [Instancing](scenes/instancing.hipscene) | `--scene .\scenes\instancing.hipscene` | Dragon PLY mesh and Arial font. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
@@ -249,8 +250,10 @@ hyperboloid { center [5, 1, 0] radius 0.4 axial_radius 0.75 height 2 material cy
 
 Define the referenced materials before these objects. All radii and heights must
 be finite and positive. Ellipsoid `radii` are the X/Y/Z semiaxes. The other new
-forms are aligned with Y; `center` is the midpoint of their height interval.
-Their lower and upper limits are `center.y - height/2` and `center.y + height/2`:
+forms default to Y; `center` is the midpoint of their height interval.
+Cylinders optionally accept `axis x`, `axis y` or `axis z` after `height`.
+The interval runs from `center[axis] - height/2` to `center[axis] + height/2`;
+cones, paraboloids and hyperboloids remain Y-aligned:
 
 - **Cylinder:** constant radius, with bottom and top disks.
 - **Cone:** `radius` at the bottom, narrowing to a point at the top; closed base.
@@ -272,6 +275,17 @@ side hits without a defined normal are ignored.
 
 All six quadratic shapes can also be CSG operands. Like spheres, the new quadrics
 may use emissive materials but currently have no direct-light surface sampler.
+
+### Analytic boxes
+
+```text
+box { center [0, 1.5, 0] size [3, 3, 3] material red }
+```
+
+`size` contains the full positive X/Y/Z dimensions. Boxes use exact slab
+intersections, not triangles, and support CSG and instancing. They are
+axis-aligned in their own coordinate system; rotate a placement using an instance.
+Emissive boxes currently have no direct-light sampler.
 
 ### Shared geometry instances
 
@@ -303,7 +317,7 @@ rotation and unit scale. Rotations use degrees, applied X, then Y, then Z:
 must be finite and strictly positive. Transforms pivot around the prototype's
 coordinate origin, **not** its bounding-box center; mesh fitting and prototype
 geometry coordinates are applied first. The optional material replaces the whole
-prototype material, including built-in cat detail materials.
+prototype material, including built-in cat detail materials and CSG leaf bindings.
 
 HIP RT builds one geometry/BVH per used prototype and a shared instance BVH.
 Repeated PLY placements share their vertex/material buffers; repeated text and
@@ -326,7 +340,7 @@ coordinates, so patterns move/rotate/scale with each placement. Fractal textures
 on objects use a unit-sized local domain; room fractal mapping is unchanged.
 
 The [instancing showcase](scenes/instancing.hipscene) places 109 instances of
-17 prototypes: every geometry/material/texture kind, rotated tori, nonuniform
+17 prototypes: varied geometry, every material/texture kind, rotated tori, nonuniform
 scales, 12 shared-geometry lights and six dragons. It requires the same external,
 CC BY 3.0 dragon asset as Detail and `C:\Windows\Fonts\arial.ttf`; the dragon is not
 bundled. Its approximately 30 million placed triangles use approximately
@@ -417,7 +431,7 @@ bidirectional layout are not supported.
 
 ### CSG: union, intersection and difference
 
-A `csg` object combines closed quadrics (sphere, ellipsoid, cylinder, cone,
+A `csg` object combines boxes, closed quadrics (sphere, ellipsoid, cylinder, cone,
 paraboloid or hyperboloid), tori and extruded text without triangulation:
 
 ```text
@@ -441,15 +455,29 @@ for ordinary CSG objects, local coordinates for CSG prototypes. Use an instance
 to transform a complete CSG object.
 Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
 
-Set the material once on the `csg` object, not on its leaves. It also covers
-new cut surfaces, whose normals point out of the remaining solid.
+Set a default material on the `csg` object. A leaf may optionally specify its own
+`material name`; otherwise it inherits that default. Each visible boundary uses
+the material of the leaf that supplies its normal. In a difference, the cutter
+therefore supplies the material of the new cut wall, whose normal points out of
+the remaining solid. Material bindings belong to the object, not the geometry
+tree, and are preserved through cached intersections and instance placement.
 Meshes, rectangles and room surfaces cannot be CSG operands. A CSG object can
 itself use an emissive material. The [CSG quadrics demo](scenes/csg_quadrics.hipscene)
 shows nested unions and cutouts with all five new shapes. Quadric caps are part
 of the solid and participate in Boolean cuts just like their curved sides.
 
+The [colored CSG scene](scenes/csg_colored.hipscene) shows one object: the
+intersection of a red box and a blue sphere, minus three green X/Y/Z cylinders.
+A smaller sphere leaves narrow red face rings and larger blue curved surfaces;
+the wider cylinders expose more green bore walls. It needs no external assets
+and uses no triangles for this solid.
+
+```powershell
+.\hiprt_demo.exe --scene ..\..\scenes\csg_colored.hipscene --output .\csg_colored.png --width 1920 --height 1080 --sampling fixed --samples 1024
+```
+
 Text operands use the same font, value, size, depth and position fields as
-standalone text, but **omit the leaf material**:
+standalone text; omit the leaf material to inherit the CSG default:
 
 ```text
 csg {

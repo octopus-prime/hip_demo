@@ -12,6 +12,6 @@
 namespace hip_demo::object {
 using Description = std::variant<scene_ast::Sphere, scene_ast::Torus, scene_ast::Mesh,
     scene_ast::Text, scene_ast::Csg, SceneMeshKind, scene_ast::Rectangle,
-    scene_ast::Ellipsoid, scene_ast::Cylinder, scene_ast::Cone, scene_ast::Paraboloid, scene_ast::Hyperboloid>;
+    scene_ast::Ellipsoid, scene_ast::Cylinder, scene_ast::Cone, scene_ast::Paraboloid, scene_ast::Hyperboloid, scene_ast::Box>;
 }
 namespace scene_ast { using Object = hip_demo::object::Description; }

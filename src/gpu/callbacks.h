@@ -16,6 +16,8 @@ __device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, c
                                      ray.minT, ray.maxT, hit, {data->glyphs, data->curves})) return false;
         result.t = hit.distance;
         result.normal = hit.front_face ? hit.normal : -hit.normal;
+        // Custom intersections preserve the selected leaf identity in the unused UV channel.
+        result.uv.x = __uint_as_float(hit.csg_leaf);
         return true;
     }
     if (result.primID >= data->count) {

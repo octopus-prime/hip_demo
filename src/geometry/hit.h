@@ -25,6 +25,7 @@ struct Hit {
     bool has_normal_map;
     bool sampled_emitter;
     unsigned int object_id;
+    unsigned int csg_leaf = csg_outside;
 };
 
 __device__ inline void set_material(Hit& hit, const GpuMaterial& material) {

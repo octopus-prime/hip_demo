@@ -20,7 +20,7 @@ inline auto paraboloid_p_def = position_p >> bp::lit("paraboloid") > '{'
     > keyword("material") > identifier_p > '}';
 inline auto csg_paraboloid_p_def = position_p >> bp::lit("paraboloid") > '{'
     > bp::lit("center") > vector_p > keyword("radius") > scalar_p > keyword("height") > scalar_p
-    > bp::attr(std::string{}) > '}';
+    > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using Paraboloid = geometry::paraboloid::parsing::Parsed;

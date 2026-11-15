@@ -1130,6 +1130,7 @@ int main(int argc, char** argv) {
             run_emission_tests(device.id);
             run_quadric_tests(device.id);
             run_csg_quadric_tests(device.id);
+            run_colored_csg_tests(device.id);
             run_instance_tests(device.id);
         }
         if (text_mode) {

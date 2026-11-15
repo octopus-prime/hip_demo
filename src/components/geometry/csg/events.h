@@ -8,6 +8,7 @@ namespace hip_demo {
 __device__ inline bool csg_same_shape(const GpuGeometry& a, const GpuGeometry& b) {
     if (a.kind != b.kind) return false;
     if (a.kind == GeometryKind::quadric) return a.quadric.same_shape(b.quadric);
+    if (a.kind == GeometryKind::box) return a.box.same_shape(b.box);
     return a.torus.center.x == b.torus.center.x && a.torus.center.y == b.torus.center.y &&
         a.torus.center.z == b.torus.center.z && a.torus.major_radius == b.torus.major_radius &&
         a.torus.minor_radius == b.torus.minor_radius && a.torus.tilt_sine == b.torus.tilt_sine &&
@@ -42,23 +43,25 @@ struct CsgQuadricBoundaries {
 __device__ inline CsgQuadricBoundaries csg_quadric_boundaries(const Ray& ray, const GpuQuadric& shape) {
     CsgQuadricBoundaries boundaries;
     const auto offset = ray.origin - vector3(shape.center);
-    if (shape.capped && ray.direction.y == 0 && fabsf(offset.y) >= shape.scale.y) return boundaries;
+    const float velocity = axis_component(ray.direction, shape.axis);
+    const float origin = axis_component(offset, shape.axis);
+    const float extent = axis_component(vector3(shape.scale), shape.axis);
+    if (shape.capped && velocity == 0 && fabsf(origin) >= extent) return boundaries;
     const auto roots = shape.intersections(ray);
     for (int i = 0; i < roots.roots.count; ++i) {
         const float t = roots.distance(i);
-        const float y = fmaf(t, ray.direction.y, offset.y) / shape.scale.y;
+        const float y = fmaf(t, velocity, origin) / extent;
         if (shape.capped && fabsf(y) > 1 + 4 * 0x1p-23f) continue;
         boundaries.add(t, shape.normal_at(ray, t));
     }
-    if (!shape.capped || ray.direction.y == 0) return boundaries;
+    if (!shape.capped || velocity == 0) return boundaries;
     for (const float y : {-1.0f, 1.0f}) {
-        const float t = (y * shape.scale.y - offset.y) / ray.direction.y;
+        const float t = (y * extent - origin) / velocity;
         if (!isfinite(t)) continue;
-        const float3 p{fmaf(t, ray.direction.x, offset.x) / shape.scale.x, y,
-                       fmaf(t, ray.direction.z, offset.z) / shape.scale.z};
-        const float tolerance = shape.evaluate({0, y, 0}) == 0 ? 0 : 4 * 0x1p-23f;
+        const auto p = with_axis_component(shape.local_point(ray, t), shape.axis, y);
+        const float tolerance = shape.evaluate(axis_vector(shape.axis, y)) == 0 ? 0 : 4 * 0x1p-23f;
         if (shape.evaluate(p) > tolerance) continue;
-        const float3 normal{0, y, 0};
+        const auto normal = axis_vector(shape.axis, y);
         bool crossing = true;
         const float epsilon = 2 * 0x1p-23f * fmaxf(1, fabsf(t));
         // A cap and side meeting at a rim are one boundary, not two parity toggles.
@@ -258,6 +261,15 @@ __device__ inline bool csg_cache_build(CsgEventCache& cache, const Ray& ray, con
                 if (!cache.add({t, normal, i, CsgEventCache::primitive, 0, 0, false, candidate, false},
                                 maximum, cache.event_count)) return false;
             }
+        } else if (leaf.shape.kind == GeometryKind::box) {
+            const auto roots = leaf.shape.box.intersections(ray, true);
+            if (!roots.found) continue;
+            for (int root = 0; root < 2; ++root) {
+                const float t = root == 0 ? roots.entry : roots.exit;
+                const auto normal = root == 0 ? roots.entry_normal : roots.exit_normal;
+                if (!cache.add({t, normal, i, CsgEventCache::primitive, 0, 0, false,
+                                t >= minimum && t < maximum, false}, maximum, cache.event_count)) return false;
+            }
         } else {
             const auto& shape = leaf.shape.torus;
             const auto torus = shape.intersections(ray, minimum, maximum);
@@ -337,6 +349,7 @@ __device__ __noinline__ inline bool intersect_csg_cached(const Ray& ray, const G
                 if ((dot(normal, ray.direction) < 0) != after) normal = -normal;
                 hit.distance = selected->distance;
                 hit.point = ray.origin + hit.distance * ray.direction;
+                hit.csg_leaf = object.first_leaf + selected->leaf;
                 set_face_normal(hit, ray, normal);
                 return true;
             }

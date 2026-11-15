@@ -7,6 +7,8 @@
 
 namespace hip_demo::geometry::quadric {
 inline Model prepare(Model value) {
+    if (value.axis != Axis::x && value.axis != Axis::y && value.axis != Axis::z)
+        throw std::runtime_error("Invalid quadric cap axis");
     const auto finite = [](SceneVector v) {
         return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
     };

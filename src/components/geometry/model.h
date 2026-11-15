@@ -11,6 +11,6 @@
 
 namespace hip_demo::geometry {
 using Model = std::variant<Sphere, Torus, Mesh, ExtrudedText, Csg, Rectangle,
-                           Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid>;
+                           Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid, Box>;
 }
 namespace hip_demo { using Geometry = geometry::Model; }

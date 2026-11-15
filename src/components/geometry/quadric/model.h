@@ -18,6 +18,7 @@ struct Model {
     SceneVector linear;
     float constant = -1;
     bool capped = false;
+    Axis axis = Axis::y;
 
     std::array<SceneVector, 2> bounds(float margin = 0) const {
         return {SceneVector{center.x - scale.x - margin, center.y - scale.y - margin, center.z - scale.z - margin},
@@ -27,6 +28,7 @@ struct Model {
     __device__ float evaluate(float3 point) const;
     __device__ float3 gradient(float3 point) const;
     __device__ QuadricRoots intersections(const Ray& ray) const;
+    __device__ float3 local_point(const Ray& ray, float distance) const;
     __device__ float3 normal_at(const Ray& ray, float distance) const;
     __device__ bool intersect(const Ray& ray, float minimum, float maximum, Hit& hit) const;
     __device__ bool same_shape(const Model& other) const;

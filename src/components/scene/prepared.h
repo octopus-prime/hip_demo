@@ -23,6 +23,7 @@ struct PreparedScene {
     unsigned int cat_detail_start = 0;
     std::vector<GpuCsg> csgs;
     std::vector<GpuCsgLeaf> csg_leaves;
+    std::vector<GpuMaterial> csg_materials;
     unsigned int glyph_count = 0;
     std::vector<GpuEmitter> emitters;
     std::vector<EmitterTriangle> emitter_triangles;

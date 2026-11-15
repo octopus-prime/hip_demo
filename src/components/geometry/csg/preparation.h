@@ -2,16 +2,19 @@
 
 #include "components/scene/prepared.h"
 #include "components/geometry/builder.h"
+#include "components/material/builder.h"
 #include <algorithm>
 #include <stdexcept>
 
 namespace hip_demo {
 
 inline void append_csg(PreparedScene& scene, const Csg& source, GpuMaterial material,
-                       std::vector<ExtrudedText>& texts) {
+                       std::vector<ExtrudedText>& texts,
+                       const std::vector<std::optional<Material>>& materials = {}) {
     GpuCsg object;
     object.first_leaf = static_cast<std::uint32_t>(scene.csg_leaves.size());
     object.material = material;
+    std::size_t material_index = materials.size();
     // Compile short-circuit Boolean evaluation into leaf-to-leaf jumps.
     // The GPU needs neither recursion nor a fixed-size expression stack.
     const auto compile = [&](auto&& self, const CsgNode& node,
@@ -41,10 +44,19 @@ inline void append_csg(PreparedScene& scene, const Csg& source, GpuMaterial mate
         leaf.when_inside = yes;
         leaf.when_outside = no;
         const auto index = static_cast<std::uint32_t>(scene.csg_leaves.size());
+        // Bindings follow left-to-right leaves; Boolean compilation visits right first.
+        GpuMaterial surface_material = material;
+        if (!materials.empty()) {
+            if (material_index == 0) throw std::runtime_error("CSG material bindings must match its leaves");
+            const auto& binding = materials[--material_index];
+            if (binding) surface_material = prepare_material(*binding);
+        }
+        scene.csg_materials.push_back(surface_material);
         scene.csg_leaves.push_back(leaf);
         return index;
     };
     object.entry = compile(compile, source.root, csg_inside, csg_outside);
+    if (material_index != 0) throw std::runtime_error("CSG material bindings must match its leaves");
     object.leaf_count = static_cast<std::uint32_t>(scene.csg_leaves.size()) - object.first_leaf;
     scene.csgs.push_back(object);
 }

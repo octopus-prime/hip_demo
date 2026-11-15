@@ -10,6 +10,7 @@
 #include "components/geometry/hyperboloid/builder.h"
 #include "components/geometry/torus/builder.h"
 #include "components/geometry/text/builder.h"
+#include "components/geometry/box/builder.h"
 #include <type_traits>
 
 namespace hip_demo::geometry::csg {
@@ -20,7 +21,8 @@ inline Model build(const Description& source, const SceneValues& values) {
         if (node.children.empty()) {
             result.geometry = std::visit([&](const auto& shape) -> decltype(result.geometry) {
                 using T = std::decay_t<decltype(shape)>;
-                if constexpr (std::is_same_v<T, scene_ast::Sphere>) return hip_demo::geometry::sphere::build(shape, values);
+                if constexpr (std::is_same_v<T, scene_ast::Box>) return hip_demo::geometry::box::build(shape, values);
+                else if constexpr (std::is_same_v<T, scene_ast::Sphere>) return hip_demo::geometry::sphere::build(shape, values);
                 else if constexpr (std::is_same_v<T, scene_ast::Ellipsoid>) return hip_demo::geometry::ellipsoid::build(shape, values);
                 else if constexpr (std::is_same_v<T, scene_ast::Cylinder>) return hip_demo::geometry::cylinder::build(shape, values);
                 else if constexpr (std::is_same_v<T, scene_ast::Cone>) return hip_demo::geometry::cone::build(shape, values);

@@ -33,7 +33,7 @@ inline auto torus_p_def = position_p >> bp::lit("torus") > '{'
     > keyword("material") > identifier_p > '}';
 inline auto csg_torus_p_def = position_p >> bp::lit("torus") > '{'
     > bp::lit("center") > vector_p > keyword("major_radius") > scalar_p
-    > keyword("minor_radius") > scalar_p > keyword("tilt_x") > scalar_p > bp::attr(std::string{}) > '}';
+    > keyword("minor_radius") > scalar_p > keyword("tilt_x") > scalar_p     > optional_material_reference_p > '}';
 }
 namespace hip_demo::parsing {
 using hip_demo::geometry::torus::parsing::torus_p;

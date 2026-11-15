@@ -28,14 +28,28 @@ inline Model build(const Description& source, const std::map<std::string, Materi
     };
     return std::visit([&](const auto& value) -> Model {
         using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, scene_ast::Sphere>)
+        if constexpr (std::is_same_v<T, scene_ast::Box>)
+            return {hip_demo::geometry::box::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Sphere>)
             return {hip_demo::geometry::sphere::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Torus>)
             return {hip_demo::geometry::torus::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Text>)
             return {hip_demo::geometry::text::build(value, values), material_reference(value)};
-        else if constexpr (std::is_same_v<T, scene_ast::Csg>)
-            return {hip_demo::geometry::csg::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Csg>) {
+            Model result{hip_demo::geometry::csg::build(value, values), material_reference(value)};
+            const auto bind = [&](auto&& self, const scene_ast::CsgNode& node) -> void {
+                if (!node.children.empty()) {
+                    for (const auto& child : node.children) self(self, child);
+                } else {
+                    result.csg_materials.push_back(std::visit([&](const auto& shape) -> std::optional<Material> {
+                        return shape.material.empty() ? std::nullopt : std::optional<Material>{material_reference(shape)};
+                    }, node.shape));
+                }
+            };
+            bind(bind, value.root);
+            return result;
+        }
         else if constexpr (std::is_same_v<T, scene_ast::Mesh>)
             return {hip_demo::geometry::mesh::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Rectangle>)

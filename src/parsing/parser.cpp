@@ -65,24 +65,26 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
             result.shape = std::visit([&](const auto& shape)
                 -> decltype(result.shape) {
                 using T = std::decay_t<decltype(shape)>;
-                if constexpr (std::is_same_v<T, Sphere>)
-                    return scene_ast::Sphere{offset(shape.where), shape.center, shape.radius, {}};
+                if constexpr (std::is_same_v<T, hip_demo::parsing::Box>)
+                    return scene_ast::Box{offset(shape.where), shape.center, shape.size, shape.material};
+                else if constexpr (std::is_same_v<T, Sphere>)
+                    return scene_ast::Sphere{offset(shape.where), shape.center, shape.radius, shape.material};
                 else if constexpr (std::is_same_v<T, Ellipsoid>)
-                    return scene_ast::Ellipsoid{offset(shape.where), shape.center, shape.radii, {}};
+                    return scene_ast::Ellipsoid{offset(shape.where), shape.center, shape.radii, shape.material};
                 else if constexpr (std::is_same_v<T, Cylinder>)
-                    return scene_ast::Cylinder{offset(shape.where), shape.center, shape.radius, shape.height, {}};
+                    return scene_ast::Cylinder{offset(shape.where), shape.center, shape.radius, shape.height, shape.material, shape.axis};
                 else if constexpr (std::is_same_v<T, Cone>)
-                    return scene_ast::Cone{offset(shape.where), shape.center, shape.radius, shape.height, {}};
+                    return scene_ast::Cone{offset(shape.where), shape.center, shape.radius, shape.height, shape.material};
                 else if constexpr (std::is_same_v<T, Paraboloid>)
-                    return scene_ast::Paraboloid{offset(shape.where), shape.center, shape.radius, shape.height, {}};
+                    return scene_ast::Paraboloid{offset(shape.where), shape.center, shape.radius, shape.height, shape.material};
                 else if constexpr (std::is_same_v<T, Hyperboloid>)
-                    return scene_ast::Hyperboloid{offset(shape.where), shape.center, shape.radius, shape.axial_radius, shape.height, {}};
+                    return scene_ast::Hyperboloid{offset(shape.where), shape.center, shape.radius, shape.axial_radius, shape.height, shape.material};
                 else if constexpr (std::is_same_v<T, Torus>)
                     return scene_ast::Torus{offset(shape.where), shape.center, shape.major_radius,
-                        shape.minor_radius, shape.tilt_x, {}};
+                        shape.minor_radius, shape.tilt_x, shape.material};
                 else
                     return scene_ast::Text{offset(shape.where), shape.font, shape.value,
-                        shape.size, shape.depth, shape.position, {}};
+                        shape.size, shape.depth, shape.position, shape.material};
             }, node.shape);
         }
         for (const auto& child : node.children) result.children.push_back(self(self, child));
@@ -109,7 +111,9 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
     const auto convert_object = [&](auto& object) {
         return std::visit([&](auto& value) -> scene_ast::Object {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, Sphere>) {
+            if constexpr (std::is_same_v<T, hip_demo::parsing::Box>) {
+                return scene_ast::Box{offset(value.where), value.center, value.size, std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, Sphere>) {
                 return scene_ast::Sphere{offset(value.where), value.center, value.radius,
                                           std::move(value.material)};
             } else if constexpr (std::is_same_v<T, Torus>) {
@@ -125,7 +129,7 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
                 return scene_ast::Ellipsoid{offset(value.where), value.center, value.radii, std::move(value.material)};
             } else if constexpr (std::is_same_v<T, hip_demo::parsing::Cylinder>) {
                 return scene_ast::Cylinder{offset(value.where), value.center, value.radius, value.height,
-                                           std::move(value.material)};
+                                           std::move(value.material), value.axis};
             } else if constexpr (std::is_same_v<T, hip_demo::parsing::Cone>) {
                 return scene_ast::Cone{offset(value.where), value.center, value.radius, value.height,
                                        std::move(value.material)};

@@ -60,12 +60,15 @@ __device__ inline QuadricRoots GpuQuadric::intersections(const Ray& ray) const {
     return result;
 }
 
-__device__ inline float3 GpuQuadric::normal_at(const Ray& ray, float distance) const {
+__device__ inline float3 GpuQuadric::local_point(const Ray& ray, float distance) const {
     const auto offset = ray.origin - vector3(center);
-    const float3 p{fmaf(distance, ray.direction.x, offset.x) / scale.x,
+    return {fmaf(distance, ray.direction.x, offset.x) / scale.x,
                    fmaf(distance, ray.direction.y, offset.y) / scale.y,
                    fmaf(distance, ray.direction.z, offset.z) / scale.z};
-    const auto n = gradient(p) / vector3(scale);
+}
+
+__device__ inline float3 GpuQuadric::normal_at(const Ray& ray, float distance) const {
+    const auto n = gradient(local_point(ray, distance)) / vector3(scale);
     const float magnitude = fmaxf(fabsf(n.x), fmaxf(fabsf(n.y), fabsf(n.z)));
     return magnitude > 0 ? normalize(n / magnitude) : float3{};
 }
@@ -73,19 +76,21 @@ __device__ inline float3 GpuQuadric::normal_at(const Ray& ray, float distance) c
 __device__ inline bool GpuQuadric::intersect(const Ray& ray, float minimum, float maximum, Hit& hit) const {
     bool found = false;
     const auto offset = ray.origin - vector3(center);
-    if (capped && ray.direction.y != 0) {
+    const float velocity = axis_component(ray.direction, axis);
+    const float origin = axis_component(offset, axis);
+    const float extent = axis_component(vector3(scale), axis);
+    if (capped && velocity != 0) {
         for (const float y : {-1.0f, 1.0f}) {
-            const float t = (y * scale.y - offset.y) / ray.direction.y;
+            const float t = (y * extent - origin) / velocity;
             if (t < minimum || t >= maximum) continue;
-            const float3 p{fmaf(t, ray.direction.x, offset.x) / scale.x, y,
-                           fmaf(t, ray.direction.z, offset.z) / scale.z};
-            const float axis_value = evaluate({0, y, 0});
+            const auto p = with_axis_component(local_point(ray, t), axis, y);
+            const float axis_value = evaluate(axis_vector(axis, y));
             // A zero-area cap must not turn a cone's apex into a small disk.
             const float tolerance = axis_value == 0 ? 0 : 4 * 0x1p-23f;
             if (evaluate(p) > tolerance) continue;
             hit.distance = maximum = t;
             hit.point = ray.origin + t * ray.direction;
-            set_face_normal(hit, ray, {0, y, 0});
+            set_face_normal(hit, ray, axis_vector(axis, y));
             found = true;
         }
     }
@@ -93,7 +98,7 @@ __device__ inline bool GpuQuadric::intersect(const Ray& ray, float minimum, floa
     for (int i = 0; i < roots.roots.count; ++i) {
         const float t = roots.distance(i);
         if (t < minimum || t >= maximum) continue;
-        const float y = fmaf(t, ray.direction.y, offset.y) / scale.y;
+        const float y = fmaf(t, velocity, origin) / extent;
         if (capped && fabsf(y) > 1 + 4 * 0x1p-23f) continue;
         if (found && maximum - t <= 2 * 0x1p-23f * fmaxf(1, fabsf(t))) continue;
         const auto normal = normal_at(ray, t);
@@ -112,6 +117,6 @@ __device__ inline bool GpuQuadric::same_shape(const GpuQuadric& other) const {
     };
     return equal(center, other.center) && equal(scale, other.scale) && equal(diagonal, other.diagonal) &&
            equal(cross, other.cross) && equal(linear, other.linear) &&
-           constant == other.constant && capped == other.capped;
+           constant == other.constant && capped == other.capped && axis == other.axis;
 }
 }
