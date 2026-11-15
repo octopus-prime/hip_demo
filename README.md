@@ -164,6 +164,7 @@ the [visual reference](docs/visual-reference.md).
 | [Dragon light](scenes/dragon_light.hipscene) | `--scene .\scenes\dragon_light.hipscene` | Same dragon PLY mesh as Detail. |
 | [Quadrics](scenes/quadrics.hipscene) | `--scene .\scenes\quadrics.hipscene` | None. |
 | [CSG quadrics](scenes/csg_quadrics.hipscene) | `--scene .\scenes\csg_quadrics.hipscene` | None. |
+| [Instancing](scenes/instancing.hipscene) | `--scene .\scenes\instancing.hipscene` | Dragon PLY mesh and Arial font. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
 crystal and a low-poly cat. Detail contains a luminous torus, mirror and glass
@@ -272,6 +273,84 @@ side hits without a defined normal are ignored.
 All six quadratic shapes can also be CSG operands. Like spheres, the new quadrics
 may use emissive materials but currently have no direct-light surface sampler.
 
+### Shared geometry instances
+
+Declare prototypes after materials/the optional legacy light, before ordinary
+objects. Place instances after ordinary objects:
+
+```text
+prototype ring = torus {
+    center [0, 0, 0] major_radius 1 minor_radius 0.25 tilt_x 0 material gold
+}
+instance { prototype ring position [-2, 1.5, 0] }
+instance {
+    prototype ring
+    position [2, 1.5, 0]
+    rotation [30, 0, 45]
+    scale [1, 0.7, 1.2]
+    material blue
+}
+```
+
+A prototype does **not** place an object. All ordinary geometry forms, including
+PLY meshes, text, CSG, `cat` and `crystal`, can be prototypes. Names must be unique
+and references must exist; nested instances are not supported. Unused prototypes
+are not prepared or uploaded. Existing ordinary objects remain compatible.
+
+Transform fields are optional, in the order shown. Defaults are zero translation/
+rotation and unit scale. Rotations use degrees, applied X, then Y, then Z:
+`world = translation + Rz * Ry * Rx * scale * prototype_point`. Scale components
+must be finite and strictly positive. Transforms pivot around the prototype's
+coordinate origin, **not** its bounding-box center; mesh fitting and prototype
+geometry coordinates are applied first. The optional material replaces the whole
+prototype material, including built-in cat detail materials.
+
+HIP RT builds one geometry/BVH per used prototype and a shared instance BVH.
+Repeated PLY placements share their vertex/material buffers; repeated text and
+CSG placements share their compiled geometry. Emissive instances also share local
+surface-sampling distributions. Nonuniform scaling adjusts normals and area PDFs;
+rectangle/torus/mesh instances support direct-light sampling, while quadric/text/
+CSG instances retain the unsampled-emission behavior described below.
+
+Diffuse, Phong, metal and glass materials optionally accept a procedural texture
+suffix after their usual parameters:
+
+```text
+material timber = phong [1, 1, 1] texture wood_detail
+material polished = metal [1, 1, 1] roughness 0.1 texture marble_detail
+```
+
+All six texture forms from the visual reference are supported. Their palette
+replaces the RGB color rather than multiplying it. Instance textures use prototype
+coordinates, so patterns move/rotate/scale with each placement. Fractal textures
+on objects use a unit-sized local domain; room fractal mapping is unchanged.
+
+The [instancing showcase](scenes/instancing.hipscene) places 109 instances of
+17 prototypes: every geometry/material/texture kind, rotated tori, nonuniform
+scales, 12 shared-geometry lights and six dragons. It requires the same external,
+CC BY 3.0 dragon asset as Detail and `C:\Windows\Fonts\arial.ttf`; the dragon is not
+bundled. Its approximately 30 million placed triangles use approximately
+5 million stored triangles. Startup reports sharing and triangle vertex-buffer
+sizes separately from BVHs/materials.
+
+From `build\bin`, benchmark the entire scene with your existing full configuration:
+
+```powershell
+.\hiprt_demo.exe --scene ..\..\scenes\instancing.hipscene --output .\instancing.png --config .\full.cfg
+```
+
+Instancing saves geometry storage and repeated BVH construction; it does not
+promise constant rendering time as placements increase.
+Scenes without instances select specialized render kernels without the added
+instance traversal/sampling code.
+
+Reference measurement on an AMD Radeon RX 9070 XT: 3840x2160, adaptive 64-1024
+samples, specular minimum 256, relative error 0.05, brightness floor 0.05 and
+batch size 8 took **239.588 s GPU time** at **790.2 average samples/pixel**
+(242.5 s total). Shared triangle vertex buffers occupied **228.9 MiB**, versus
+1373.4 MiB for duplicated placements, excluding BVHs/materials. This measures the
+showcase workload, not a timing comparison against duplicated geometry.
+
 ### Emissive objects and mesh lights
 
 Lights are ordinary objects with an emissive material. RGB values specify
@@ -299,8 +378,9 @@ The room ceiling itself no longer contains a special light region.
 
 Direct lighting samples rectangles, tori and meshes through references to the
 prepared geometry, without a second light-shape model. Mesh triangles are selected
-proportionally to their **final world-space area**, then sampled uniformly within
-the triangle. Degenerate triangles are skipped; wholly degenerate emissive meshes
+proportionally to their **prepared geometry area**, then sampled uniformly within
+the triangle. Instances reuse this local distribution and adjust world-space
+PDFs by the surface-area Jacobian. Degenerate triangles are skipped; wholly degenerate emissive meshes
 are rejected. PDFs include emitter selection; tilted tori use their geometry's
 transform and nonuniform angular-sampling PDF.
 
@@ -356,7 +436,9 @@ csg {
 Define `gold` as a named material earlier in the scene. Each `union`,
 `intersection` or `difference` takes **exactly two operands**, which may themselves
 be nested operations. `difference` subtracts the second operand from the first.
-All leaf coordinates are scene coordinates; there is no separate group transform.
+All leaf coordinates use the CSG object's coordinate system: scene coordinates
+for ordinary CSG objects, local coordinates for CSG prototypes. Use an instance
+to transform a complete CSG object.
 Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
 
 Set the material once on the `csg` object, not on its leaves. It also covers

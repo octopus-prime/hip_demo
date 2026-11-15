@@ -158,6 +158,46 @@ inline PreparedScene prepare_scene(const SceneDescription& description) {
     compiled.csg_leaves = std::move(csg_leaves);
     compiled.glyph_count = glyph_count;
     prepare_emitters(compiled, first_rectangle_id);
+    if (description.instances.empty()) return compiled;
+    if (description.objects.size() > UINT32_MAX || description.prototypes.size() >= UINT32_MAX ||
+        description.instances.size() > UINT32_MAX - description.objects.size())
+        throw std::runtime_error("Scene exceeds the instance index limit");
+    std::vector<bool> used(description.prototypes.size()), sampled(description.prototypes.size());
+    for (const auto& placement : description.instances) {
+        if (placement.prototype >= description.prototypes.size())
+            throw std::runtime_error("Instance references an unknown prototype");
+        used[placement.prototype] = true;
+        const auto& material = placement.material ? *placement.material : description.prototypes[placement.prototype].material;
+        if (std::holds_alternative<Emissive>(material)) sampled[placement.prototype] = true;
+    }
+    compiled.prototypes.resize(description.prototypes.size());
+    for (std::size_t i = 0; i < description.prototypes.size(); ++i) {
+        if (!used[i]) continue;
+        SceneDescription prototype;
+        prototype.settings = description.settings;
+        prototype.objects = {description.prototypes[i]};
+        auto& prepared = compiled.prototypes[i];
+        prepared = prepare_scene(prototype);
+        if (sampled[i])
+            prepare_emitters(prepared, std::holds_alternative<Rectangle>(prototype.objects[0].geometry) ? 0 : UINT32_MAX,
+                             true);
+    }
+    for (std::size_t i = 0; i < description.instances.size(); ++i) {
+        const auto& placement = description.instances[i];
+        const auto& prototype = compiled.prototypes[placement.prototype];
+        if (prototype.bounds.empty() && prototype.vertices.empty()) continue;
+        const auto& material = placement.material ? *placement.material : description.prototypes[placement.prototype].material;
+        const auto id = static_cast<unsigned int>(description.objects.size() + i);
+        if (std::holds_alternative<Emissive>(material) && !prototype.emitters.empty()) {
+            auto emitter = prototype.emitters.front();
+            emitter.object_id = id;
+            emitter.instance = static_cast<unsigned int>(compiled.instances.size());
+            compiled.emitters.push_back(emitter);
+        }
+        compiled.instances.push_back({instance::prepare_transform(placement.transform), prepare_material(material),
+                                      placement.prototype, id, placement.material.has_value()});
+    }
+    if (compiled.emitters.size() > UINT32_MAX) throw std::runtime_error("Scene exceeds the emitter index limit");
     return compiled;
 }
 

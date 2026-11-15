@@ -19,8 +19,8 @@ __device__ inline void apply_texture(Hit& hit, const Ray& ray, const GpuSceneSet
     } else if (hit.texture == TextureKind::marble) {
         hit.albedo = marble_albedo(point);
     } else if (hit.texture == TextureKind::mandelbrot || hit.texture == TextureKind::julia) {
-        const float depth = settings ? settings->room_size.z : 2 * room_half_depth;
-        const float height = settings ? settings->room_size.y : room_height;
+        const float depth = wall < 0 ? 2 : settings ? settings->room_size.z : 2 * room_half_depth;
+        const float height = wall < 0 ? 0 : settings ? settings->room_size.y : room_height;
         hit.albedo = hit.texture == TextureKind::julia
             ? julia_albedo(point, depth, height) : mandelbrot_albedo(point, depth, height);
     }

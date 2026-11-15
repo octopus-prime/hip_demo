@@ -106,8 +106,8 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
                                          light.minor_radius, light.radiance};
         }
     }, *parsed.light);
-    for (auto& object : parsed.objects) {
-        scene.objects.push_back(std::visit([&](auto& value) -> scene_ast::Object {
+    const auto convert_object = [&](auto& object) {
+        return std::visit([&](auto& value) -> scene_ast::Object {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, Sphere>) {
                 return scene_ast::Sphere{offset(value.where), value.center, value.radius,
@@ -144,8 +144,15 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
             } else {
                 return value;
             }
-        }, object));
-    }
+        }, object);
+    };
+    for (auto& object : parsed.objects) scene.objects.push_back(convert_object(object));
+    for (auto& prototype : parsed.prototypes)
+        scene.prototypes.push_back({offset(prototype.where), std::move(prototype.name),
+                                    convert_object(prototype.object)});
+    for (auto& instance : parsed.instances)
+        scene.instances.push_back({offset(instance.where), std::move(instance.prototype), instance.position,
+                                    instance.rotation, instance.scale, std::move(instance.material)});
     return scene;
 }
 

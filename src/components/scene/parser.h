@@ -5,6 +5,7 @@
 #include "components/material/parser.h"
 #include "components/light/parser.h"
 #include "components/object/parser.h"
+#include "components/instance/parser.h"
 #include "components/scene/description.h"
 
 namespace hip_demo::parsing {
@@ -34,7 +35,9 @@ struct Parsed {
     Room room;
     std::vector<NamedMaterial> materials;
     std::optional<Light> light;
+    std::vector<hip_demo::instance::parsing::Prototype> prototypes;
     std::vector<Object> objects;
+    std::vector<hip_demo::instance::parsing::Instance> instances;
 };
 }
 namespace hip_demo::parsing {
@@ -45,7 +48,8 @@ using hip_demo::parsing::ParsedScene;
 inline bp::rule<hip_demo::parsing::scene_p_, ParsedScene> scene_p = "hipscene 1 scene";
 
 inline auto scene_p_def = keyword("hipscene") > keyword("1")
-    > camera_p > room_p > *material_p > -light_p > *object_p > bp::eoi;
+    > camera_p > room_p > *material_p > -light_p > *hip_demo::instance::parsing::prototype_p
+    > *object_p > *hip_demo::instance::parsing::instance_p > bp::eoi;
 }
 namespace hip_demo::parsing {
 using scene::parsing::scene_p;

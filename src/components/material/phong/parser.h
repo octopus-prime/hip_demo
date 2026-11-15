@@ -1,6 +1,7 @@
 #pragma once
 
 #include "components/value/parser.h"
+#include "components/texture/parser.h"
 #include "components/material/phong/description.h"
 
 namespace hip_demo::parsing {
@@ -14,7 +15,7 @@ using hip_demo::parsing::Vector;
 
 inline bp::rule<hip_demo::parsing::phong_p_, Description> phong_p = "Phong material";
 
-inline auto phong_p_def = bp::lit("phong") > vector_p;
+inline auto phong_p_def = bp::lit("phong") > vector_p > -(keyword("texture") > material_texture_p);
 }
 namespace hip_demo::parsing {
 using hip_demo::material::phong::parsing::phong_p;

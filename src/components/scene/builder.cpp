@@ -36,6 +36,29 @@ Model build(const Description& parsed) {
     for (const auto& object : parsed.objects)
         scene.objects.push_back(hip_demo::object::build(object, materials, values));
     if (parsed.light) scene.objects.push_back(light::build(*parsed.light, settings.room, values));
+    std::map<std::string, std::uint32_t> prototypes;
+    for (const auto& prototype : parsed.prototypes) {
+        if (scene.prototypes.size() >= std::numeric_limits<std::uint32_t>::max())
+            errors.fail(prototype.where, "too many prototypes");
+        if (!prototypes.emplace(prototype.name, static_cast<std::uint32_t>(scene.prototypes.size())).second)
+            errors.fail(prototype.where, "duplicate prototype '" + prototype.name + "'");
+        scene.prototypes.push_back(hip_demo::object::build(prototype.object, materials, values));
+    }
+    for (const auto& source : parsed.instances) {
+        const auto found = prototypes.find(source.prototype);
+        if (found == prototypes.end()) errors.fail(source.where, "unknown prototype '" + source.prototype + "'");
+        hip_demo::Instance instance;
+        instance.prototype = found->second;
+        if (source.position) instance.transform.position = values.vector(*source.position, source.where);
+        if (source.rotation) instance.transform.rotation = values.vector(*source.rotation, source.where);
+        if (source.scale) instance.transform.scale = values.dimensions(*source.scale, source.where);
+        if (source.material) {
+            const auto material = materials.find(*source.material);
+            if (material == materials.end()) errors.fail(source.where, "unknown material '" + *source.material + "'");
+            instance.material = material->second;
+        }
+        scene.instances.push_back(std::move(instance));
+    }
     return scene;
 }
 
@@ -53,7 +76,7 @@ Model load(const std::string& path) {
         if (auto* text = std::get_if<hip_demo::ExtrudedText>(&node.geometry)) resolve_text(*text);
         for (auto& child : node.children) self(self, child);
     };
-    for (auto& object : scene.objects) {
+    const auto resolve_object = [&](hip_demo::Object& object) {
         std::visit([&](auto& geometry) {
             using T = std::decay_t<decltype(geometry)>;
             if constexpr (std::is_same_v<T, hip_demo::Mesh>) {
@@ -62,7 +85,9 @@ Model load(const std::string& path) {
             } else if constexpr (std::is_same_v<T, hip_demo::ExtrudedText>) resolve_text(geometry);
             else if constexpr (std::is_same_v<T, hip_demo::Csg>) resolve_csg(resolve_csg, geometry.root);
         }, object.geometry);
-    }
+    };
+    for (auto& object : scene.objects) resolve_object(object);
+    for (auto& object : scene.prototypes) resolve_object(object);
     return scene;
 }
 

@@ -6,6 +6,7 @@
 #include "components/material/description.h"
 #include "components/light/description.h"
 #include "components/object/description.h"
+#include "components/instance/description.h"
 #include <optional>
 
 namespace hip_demo::scene {
@@ -18,6 +19,8 @@ struct Description {
     std::vector<scene_ast::Object> objects;
     std::string text;
     std::string source;
+    std::vector<scene_ast::Prototype> prototypes;
+    std::vector<scene_ast::Instance> instances;
 };
 }
 namespace scene_ast { using Scene = hip_demo::scene::Description; }

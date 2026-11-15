@@ -65,15 +65,30 @@ std::unique_ptr<T, HipBufferDeleter> allocate_device(std::size_t count, std::str
 
 struct HiprtContextOwner {
     hiprtContext value = nullptr;
-    HiprtContextOwner() = default;
+    bool owns = true;
+    explicit HiprtContextOwner(hiprtContext borrowed = nullptr) : value(borrowed), owns(!borrowed) {}
     HiprtContextOwner(const HiprtContextOwner&) = delete;
     HiprtContextOwner& operator=(const HiprtContextOwner&) = delete;
     ~HiprtContextOwner() {
-        if (value) {
+        if (value && owns) {
             const hiprtError result = hiprtDestroyContext(value);
             if (result != hiprtSuccess) {
                 std::cerr << "Destroying HIP RT context: error " << result << '\n';
             }
+        }
+    }
+};
+
+struct HiprtSceneOwner {
+    hiprtContext context = nullptr;
+    hiprtScene value = nullptr;
+    HiprtSceneOwner() = default;
+    HiprtSceneOwner(const HiprtSceneOwner&) = delete;
+    HiprtSceneOwner& operator=(const HiprtSceneOwner&) = delete;
+    ~HiprtSceneOwner() {
+        if (value) {
+            const hiprtError result = hiprtDestroyScene(context, value);
+            if (result != hiprtSuccess) std::cerr << "Destroying HIP RT scene: error " << result << '\n';
         }
     }
 };

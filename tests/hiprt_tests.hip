@@ -9,6 +9,7 @@
 #include "csg_text_tests.h"
 #include "emission_tests.h"
 #include "quadric_tests.h"
+#include "instance_tests.h"
 
 using namespace hip_demo;
 
@@ -380,11 +381,11 @@ void check_adaptive_render(TraceScene scene) {
     for (const int cap : {1, 63, 64, 73}) {
         for (int first = 0; first < cap;) {
             const int end = first + std::min(samples_per_batch, cap - first);
-            hipLaunchKernelGGL(render_adaptive_kernel, dim3(3, 2), dim3(8, 8), 0, 0,
+            hipLaunchKernelGGL(render_adaptive_kernel<false>, dim3(3, 2), dim3(8, 8), 0, 0,
                                adaptive_pixels.get(), states.get(), scene, width, height, first, end, cap,
                                SamplingOptions{});
             check_hip(hipGetLastError(), "Launching adaptive test renderer");
-            hipLaunchKernelGGL(render_kernel, dim3(3, 2), dim3(8, 8), 0, 0,
+            hipLaunchKernelGGL(render_kernel<false>, dim3(3, 2), dim3(8, 8), 0, 0,
                                fixed_pixels.get(), sums.get(), scene, width, height, first, end, cap);
             check_hip(hipGetLastError(), "Launching fixed test renderer");
             first = end;
@@ -1129,6 +1130,7 @@ int main(int argc, char** argv) {
             run_emission_tests(device.id);
             run_quadric_tests(device.id);
             run_csg_quadric_tests(device.id);
+            run_instance_tests(device.id);
         }
         if (text_mode) {
             check_text_scene(device.id, argv[2]);

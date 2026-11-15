@@ -11,6 +11,7 @@
 #include "components/texture/mandelbrot/builder.h"
 #include "components/texture/julia/builder.h"
 #include <type_traits>
+#include <optional>
 
 namespace hip_demo::texture {
 inline Model build(const Description& value, scene_ast::Position where, const SceneValues& values) {
@@ -26,6 +27,11 @@ inline Model build(const Description& value, scene_ast::Position where, const Sc
             return hip_demo::texture::julia::build(source);
         }
     }, value);
+}
+inline Model build_albedo(scene_ast::Vector color, const std::optional<Description>& texture,
+                           scene_ast::Position where, const SceneValues& values) {
+    const auto constant = values.color(color, where);
+    return texture ? build(*texture, where, values) : Model{ConstantColor{constant}};
 }
 }
 namespace hip_demo {

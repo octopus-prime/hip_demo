@@ -11,6 +11,7 @@ struct GpuEmitter {
     unsigned int first;
     unsigned int count;
     double area;
+    unsigned int instance = UINT32_MAX;
 };
 
 struct EmitterTriangle {

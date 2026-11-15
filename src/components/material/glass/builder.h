@@ -7,7 +7,7 @@
 
 namespace hip_demo::material::glass {
 inline Model build(const Description& value, scene_ast::Position where, const SceneValues& values) {
-    const Texture albedo = ConstantColor{values.color(value.albedo, where)};
+    const Texture albedo = texture::build_albedo(value.albedo, value.texture, where, values);
     return {albedo};
 }
 

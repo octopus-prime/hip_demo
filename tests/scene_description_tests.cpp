@@ -107,6 +107,39 @@ int main(int argc, char** argv) {
                 std::filesystem::exists(geometry_of<Mesh>(scene).file), "mesh paths resolve relative to scene");
         std::ifstream file(argv[1]);
         const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        const std::string instances = R"(
+hipscene 1
+camera { position [0, 2, 10] target [0, 2, 0] half_view_height 0.4 }
+room {
+    size [12, 8, 10]
+    floor color [0.7, 0.7, 0.7] ceiling color [0.7, 0.7, 0.7] back color [0.7, 0.7, 0.7]
+    left color [0.7, 0.7, 0.7] right color [0.7, 0.7, 0.7]
+}
+material red = diffuse [0.8, 0.1, 0.1]
+material blue = phong [0.1, 0.2, 0.8] texture wood_detail
+prototype ball = sphere { center [0, 0, 0] radius 1 material red }
+prototype crystal_shape = crystal
+sphere { center [0, 1, 3] radius 0.2 material red }
+instance { prototype ball }
+instance { prototype ball position [2, 3, 4] rotation [30, 90, 45] scale [2, 1, 0.5] material blue }
+instance { prototype crystal_shape position [-2, 1, 0] }
+)";
+        const auto instanced = build_scene_description(detached_ast(instances, "instances.hipscene"));
+        require(instanced.objects.size() == 1 && instanced.prototypes.size() == 2 && instanced.instances.size() == 3 &&
+                instanced.instances[0].prototype == instanced.instances[1].prototype &&
+                instanced.instances[0].transform.scale.x == 1 && !instanced.instances[0].material &&
+                instanced.instances[1].transform.position.z == 4 &&
+                instanced.instances[1].transform.rotation.y == 90 &&
+                instanced.instances[1].transform.scale.z == 0.5f &&
+                std::holds_alternative<Phong>(*instanced.instances[1].material) &&
+                std::holds_alternative<Wood>(std::get<Phong>(*instanced.instances[1].material).albedo) &&
+                std::holds_alternative<Mesh>(instanced.prototypes[1].geometry),
+                "prototypes are not placed and instances retain transforms, sharing and material overrides");
+        rejects_build(replace(instances, "prototype ball }", "prototype missing }"), "unknown prototype");
+        rejects_build(replace(instances, "prototype crystal_shape = crystal", "prototype ball = crystal"), "duplicate prototype");
+        rejects_build(replace(instances, "material blue }", "material missing }"), "unknown material");
+        rejects_build(replace(instances, "scale [2, 1, 0.5]", "scale [2, 0, 0.5]"), "dimensions");
+        rejects_build(replace(instances, "rotation [30, 90, 45]", "rotation [1e50, 90, 45]"), "finite");
         const std::string quadrics = R"(
 ellipsoid { center [0, 2, 0] radii [0.75, 1.5, 0.5] material red }
 cylinder { center [4, 2, 0] radius 1 height 2 material red }

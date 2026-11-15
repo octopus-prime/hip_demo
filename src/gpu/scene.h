@@ -22,7 +22,8 @@ public:
     HiprtScene(int device, const SceneDescription& description)
         : HiprtScene(device, prepare_scene(description)) {}
 
-    HiprtScene(int device, PreparedScene prepared) {
+    HiprtScene(int device, PreparedScene prepared, hiprtContext shared_context = nullptr,
+               unsigned int geometry_type = 0) : context_(shared_context) {
         hipCtx_t hip_context = nullptr;
         // HIP RT 3.0 requires this handle; HIP 7.1 has no non-deprecated context getter.
 #pragma clang diagnostic push
@@ -36,8 +37,9 @@ public:
         context_input.ctxt = hip_context;
         context_input.device = device;
         context_input.deviceType = hiprtDeviceAMD;
-        check_hiprt(hiprtCreateContext(HIPRT_API_VERSION, context_input, context_.value),
-                    "Creating the HIP RT context");
+        if (!shared_context)
+            check_hiprt(hiprtCreateContext(HIPRT_API_VERSION, context_input, context_.value),
+                        "Creating the HIP RT context");
 
         settings_ = allocate_device<GpuSceneSettings>(1, "Allocating scene settings");
         check_hip(hipMemcpy(settings_.get(), &prepared.settings, sizeof(GpuSceneSettings), hipMemcpyHostToDevice),
@@ -80,7 +82,7 @@ public:
 
             hiprtGeometryBuildInput input{};
             input.type = hiprtPrimitiveTypeAABBList;
-            input.geomType = 0;
+            input.geomType = geometry_type;
             input.primitive.aabbList.aabbs = bounds_.get();
             input.primitive.aabbList.aabbCount = custom_count;
             input.primitive.aabbList.aabbStride = 2 * sizeof(float3);
@@ -102,7 +104,8 @@ public:
             check_hip(hipDeviceSynchronize(), "Waiting for HIP RT geometry");
 
             functions_.context = context_.value;
-            check_hiprt(hiprtCreateFuncTable(context_.value, 1, 1, functions_.value),
+            const auto types = static_cast<unsigned int>(prepared.prototypes.size()) + geometry_type + 1;
+            check_hiprt(hiprtCreateFuncTable(context_.value, types, 1, functions_.value),
                         "Creating HIP RT function table");
             hiprtFuncDataSet function_data{};
             primitive_data_ = allocate_device<PrimitiveData>(1, "Allocating primitive dispatch data");
@@ -112,7 +115,7 @@ public:
             check_hip(hipMemcpy(primitive_data_.get(), &data, sizeof(data), hipMemcpyHostToDevice),
                       "Uploading primitive dispatch data");
             function_data.intersectFuncData = primitive_data_.get();
-            check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, 0, 0, function_data),
+            check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, geometry_type, 0, function_data),
                         "Initializing HIP RT function table");
         }
 
@@ -135,6 +138,7 @@ public:
         cat_detail_start_ = prepared.cat_detail_start;
         mesh_triangle_count_ = static_cast<unsigned int>(vertices.size() / 3);
         if (vertices.empty()) {
+            build_instances(device, prepared);
             return;
         }
         triangle_materials_ =
@@ -148,6 +152,7 @@ public:
                   "Uploading mesh vertices");
         hiprtGeometryBuildInput mesh_input{};
         mesh_input.type = hiprtPrimitiveTypeTriangleMesh;
+        mesh_input.geomType = geometry_type;
         mesh_input.primitive.triangleMesh.vertices = mesh_vertices_.get();
         mesh_input.primitive.triangleMesh.vertexCount = static_cast<std::uint32_t>(vertices.size());
         mesh_input.primitive.triangleMesh.vertexStride = sizeof(float4);
@@ -169,16 +174,103 @@ public:
                                       mesh_temporary.get(), nullptr, mesh_.value),
                     "Building HIP RT mesh geometry");
         check_hip(hipDeviceSynchronize(), "Waiting for HIP RT mesh geometry");
+        build_instances(device, prepared);
     }
 
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
                 mesh_triangle_count_, cat_detail_start_, settings_.get(),
                 primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_,
-                csgs_.get(), csg_count_, emitters_.get(), emitter_count_, emitter_triangles_.get()};
+                csgs_.get(), csg_count_, emitters_.get(), emitter_count_, emitter_triangles_.get(),
+                instance_scene_.value, instances_.get(), prototype_views_.get()};
     }
 
 private:
+    void build_instances(int device, PreparedScene& prepared) {
+        if (prepared.instances.empty()) return;
+        if (!functions_.value) {
+            functions_.context = context_.value;
+            check_hiprt(hiprtCreateFuncTable(context_.value, static_cast<unsigned int>(prepared.prototypes.size()) + 1,
+                                            1, functions_.value), "Creating instance function table");
+        }
+        prototype_scenes_.resize(prepared.prototypes.size());
+        std::vector<GpuPrototype> views(prepared.prototypes.size());
+        std::vector<bool> used(prepared.prototypes.size());
+        for (const auto& placement : prepared.instances) used[placement.prototype] = true;
+        std::size_t shared_triangles = 0, placed_triangles = 0;
+        for (std::size_t i = 0; i < prepared.prototypes.size(); ++i) {
+            if (!used[i]) continue;
+            const auto type = static_cast<unsigned int>(i) + 1;
+            auto& prototype = prototype_scenes_[i];
+            prototype = std::make_unique<HiprtScene>(device, std::move(prepared.prototypes[i]), context_.value, type);
+            views[i] = {prototype->scene()};
+            shared_triangles += prototype->mesh_triangle_count_;
+            hiprtFuncDataSet data{};
+            data.intersectFuncData = prototype->primitive_data_.get();
+            check_hiprt(hiprtSetFuncTable(context_.value, functions_.value, type, 0, data),
+                        "Registering instance geometry callbacks");
+        }
+        std::vector<hiprtInstance> references;
+        std::vector<hiprtFrameMatrix> frames;
+        references.reserve(prepared.instances.size());
+        frames.reserve(prepared.instances.size());
+        for (const auto& placement : prepared.instances) {
+            const auto& prototype = *prototype_scenes_[placement.prototype];
+            hiprtInstance reference{};
+            reference.type = hiprtInstanceTypeGeometry;
+            reference.geometry = prototype.geometry_.value ? prototype.geometry_.value : prototype.mesh_.value;
+            references.push_back(reference);
+            hiprtFrameMatrix frame{};
+            for (int row = 0; row < 3; ++row) {
+                const auto value = placement.transform.rows[row];
+                frame.matrix[row][0] = value.x;
+                frame.matrix[row][1] = value.y;
+                frame.matrix[row][2] = value.z;
+            }
+            frame.matrix[0][3] = placement.transform.position.x;
+            frame.matrix[1][3] = placement.transform.position.y;
+            frame.matrix[2][3] = placement.transform.position.z;
+            frames.push_back(frame);
+            placed_triangles += prototype.mesh_triangle_count_;
+        }
+        instances_ = allocate_device<GpuInstance>(prepared.instances.size(), "Allocating instance shading data");
+        prototype_views_ = allocate_device<GpuPrototype>(views.size(), "Allocating shared geometry views");
+        instance_references_ = allocate_device<hiprtInstance>(references.size(), "Allocating HIP RT instances");
+        instance_frames_ = allocate_device<hiprtFrameMatrix>(frames.size(), "Allocating instance frames");
+        check_hip(hipMemcpy(instances_.get(), prepared.instances.data(), prepared.instances.size() * sizeof(GpuInstance),
+                            hipMemcpyHostToDevice), "Uploading instance shading data");
+        check_hip(hipMemcpy(prototype_views_.get(), views.data(), views.size() * sizeof(GpuPrototype),
+                            hipMemcpyHostToDevice), "Uploading shared geometry views");
+        check_hip(hipMemcpy(instance_references_.get(), references.data(), references.size() * sizeof(hiprtInstance),
+                            hipMemcpyHostToDevice), "Uploading HIP RT instances");
+        check_hip(hipMemcpy(instance_frames_.get(), frames.data(), frames.size() * sizeof(hiprtFrameMatrix),
+                            hipMemcpyHostToDevice), "Uploading instance frames");
+        hiprtSceneBuildInput input{};
+        input.instances = instance_references_.get();
+        input.instanceFrames = instance_frames_.get();
+        input.instanceCount = static_cast<unsigned int>(references.size());
+        input.frameCount = input.instanceCount;
+        input.frameType = hiprtFrameTypeMatrix;
+        hiprtBuildOptions options{};
+        options.buildFlags = hiprtBuildFlagBitPreferHighQualityBuild;
+        std::size_t temporary_size = 0;
+        check_hiprt(hiprtGetSceneBuildTemporaryBufferSize(context_.value, input, options, temporary_size),
+                    "Querying instance BVH build memory");
+        std::unique_ptr<std::uint8_t, HipBufferDeleter> temporary;
+        if (temporary_size) temporary = allocate_device<std::uint8_t>(temporary_size, "Allocating instance BVH memory");
+        instance_scene_.context = context_.value;
+        check_hiprt(hiprtCreateScene(context_.value, input, options, instance_scene_.value), "Creating instance BVH");
+        check_hiprt(hiprtBuildScene(context_.value, hiprtBuildOperationBuild, input, options, temporary.get(), nullptr,
+                                   instance_scene_.value), "Building instance BVH");
+        check_hip(hipDeviceSynchronize(), "Waiting for instance BVH");
+        std::cout << "Instancing: " << references.size() << " placements, "
+                  << std::count(used.begin(), used.end(), true) << " shared geometries; "
+                  << shared_triangles << " stored triangles / " << placed_triangles << " placed triangles.\n";
+        std::cout << "Shared triangle vertex buffers: "
+                  << shared_triangles * (3.0 * sizeof(float4) / (1024 * 1024)) << " MiB; duplicated placements would use "
+                  << placed_triangles * (3.0 * sizeof(float4) / (1024 * 1024)) << " MiB (excluding BVHs/materials).\n";
+    }
+
     HiprtContextOwner context_;
     std::unique_ptr<GpuSceneSettings, HipBufferDeleter> settings_;
     std::unique_ptr<GpuPrimitive, HipBufferDeleter> primitives_;
@@ -200,6 +292,12 @@ private:
     unsigned int csg_count_ = 0;
     unsigned int cat_detail_start_ = 0;
     unsigned int emitter_count_ = 0;
+    std::vector<std::unique_ptr<HiprtScene>> prototype_scenes_;
+    std::unique_ptr<GpuInstance, HipBufferDeleter> instances_;
+    std::unique_ptr<GpuPrototype, HipBufferDeleter> prototype_views_;
+    std::unique_ptr<hiprtInstance, HipBufferDeleter> instance_references_;
+    std::unique_ptr<hiprtFrameMatrix, HipBufferDeleter> instance_frames_;
+    HiprtSceneOwner instance_scene_;
 };
 
 }

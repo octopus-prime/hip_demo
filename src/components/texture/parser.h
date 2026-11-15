@@ -33,6 +33,7 @@ inline auto ceiling_p_def = surface_p | wood_p;
 inline auto back_p_def = surface_p | wood_p | marble_p;
 inline auto left_p_def = surface_p | mandelbrot_p;
 inline auto right_p_def = surface_p | julia_p;
+inline auto material_texture_p = surface_p | tiles_p | wood_p | mandelbrot_p | julia_p | marble_p;
 }
 namespace hip_demo::parsing {
 using texture::parsing::floor_p;
@@ -45,4 +46,5 @@ using texture::parsing::left_p;
 using texture::parsing::left_p_def;
 using texture::parsing::right_p;
 using texture::parsing::right_p_def;
+using texture::parsing::material_texture_p;
 }

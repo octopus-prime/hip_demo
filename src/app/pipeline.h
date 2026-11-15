@@ -33,12 +33,14 @@ inline int run_demo(int argc, char** argv) {
         std::cout << "Rendering on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
         std::size_t primitives = 0, meshes = 0, texts = 0, csgs = 0;
-        for (const auto& object : description.objects) {
+        const auto count_object = [&](const Object& object) {
             if (std::holds_alternative<Mesh>(object.geometry)) ++meshes;
             else if (std::holds_alternative<ExtrudedText>(object.geometry)) ++texts;
             else if (std::holds_alternative<Csg>(object.geometry)) ++csgs;
             else ++primitives;
-        }
+        };
+        for (const auto& object : description.objects) count_object(object);
+        for (const auto& placement : description.instances) count_object(description.prototypes.at(placement.prototype));
         std::cout << "Scene: " << primitives << " primitives, "
                   << meshes << " meshes, " << texts << " text objects, "
                   << csgs << " CSG objects; "

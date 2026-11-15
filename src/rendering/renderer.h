@@ -52,6 +52,9 @@ inline GpuImage render_image(TraceScene scene, const RenderOptions& options) {
     };
     HipEvent start;
     HipEvent stop;
+    // Keep unused instance traversal/sampling code out of ordinary scenes' GPU kernels.
+    const auto fixed_kernel = scene.instance_scene ? render_kernel<true> : render_kernel<false>;
+    const auto adaptive_kernel = scene.instance_scene ? render_adaptive_kernel<true> : render_adaptive_kernel<false>;
     float render_milliseconds = 0.0f;
     int last_progress = 0;
     std::cout << "Rendering: 0% (0/" << sample_count << " sample passes)" << std::flush;
@@ -59,11 +62,11 @@ inline GpuImage render_image(TraceScene scene, const RenderOptions& options) {
         const int sample_end = first_sample + std::min(options.sampling.batch, sample_count - first_sample);
         check_hip(hipEventRecord(start.value, nullptr), "Starting GPU batch timer");
         if (adaptive) {
-            hipLaunchKernelGGL(render_adaptive_kernel, grid_size, block_size, 0, 0, result.pixels.get(),
+            hipLaunchKernelGGL(adaptive_kernel, grid_size, block_size, 0, 0, result.pixels.get(),
                                adaptive_states.get(), scene, image_width, image_height,
                                first_sample, sample_end, sample_count, options.sampling);
         } else {
-            hipLaunchKernelGGL(render_kernel, grid_size, block_size, 0, 0, result.pixels.get(),
+            hipLaunchKernelGGL(fixed_kernel, grid_size, block_size, 0, 0, result.pixels.get(),
                                device_sums.get(), scene, image_width, image_height,
                                first_sample, sample_end, sample_count);
         }

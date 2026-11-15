@@ -1,0 +1,156 @@
+hipscene 1
+camera { position [0, 18, 38] target [0, 1.5, -2] half_view_height 0.48 }
+room {
+    size [64, 22, 56]
+    floor tiles_detail
+    ceiling color [0.6, 0.6, 0.6]
+    back color [0.32, 0.36, 0.43]
+    left color [0.55, 0.55, 0.55]
+    right color [0.55, 0.55, 0.55]
+}
+material blue = phong [0.18, 0.38, 0.68]
+material ivory = diffuse [0.72, 0.7, 0.65]
+material gold = metal [0.92, 0.58, 0.22] roughness 0.12
+material glass = glass [0.96, 0.98, 1]
+material wood = phong [1, 1, 1] texture wood_detail
+material marble = phong [1, 1, 1] texture marble_detail
+material tiles = diffuse [1, 1, 1] texture tiles_detail
+material mandelbrot = diffuse [1, 1, 1] texture mandelbrot_detail
+material julia = diffuse [1, 1, 1] texture julia_detail
+material warm = emissive [20, 16, 11]
+material panel = emissive [4, 4.5, 5]
+prototype ball = sphere { center [0, 0, 0] radius 1 material blue }
+prototype oval = ellipsoid { center [0, 0, 0] radii [1, 0.85, 0.65] material wood }
+prototype cylinder_shape = cylinder { center [0, 0, 0] radius 0.85 height 2 material gold }
+prototype cone_shape = cone { center [0, 0, 0] radius 1 height 2 material tiles }
+prototype parabola = paraboloid { center [0, 0, 0] radius 1 height 2 material marble }
+prototype hourglass = hyperboloid { center [0, 0, 0] radius 0.55 axial_radius 0.8 height 2 material julia }
+prototype ring = torus { center [0, 0, 0] major_radius 0.9 minor_radius 0.23 tilt_x 0 material gold }
+prototype square = rectangle { center [0, 0, 0] width 2 depth 2 material tiles }
+prototype pyramid = mesh { file "reference/pyramid.ply" up y fit [1.7, 2, 1.7] position [0, 0, 0] material ivory }
+prototype cat_shape = cat
+prototype crystal_shape = crystal
+prototype letters = text { font "C:\\Windows\\Fonts\\arial.ttf" value "RT" size 1.4 depth 0.18 position [-0.8, -0.5, 0] material gold }
+prototype joined = csg { material blue union {
+    sphere { center [-0.4, 0, 0] radius 0.8 }
+    sphere { center [0.4, 0, 0] radius 0.8 }
+} }
+prototype lens = csg { material glass intersection {
+    sphere { center [-0.3, 0, 0] radius 1 }
+    sphere { center [0.3, 0, 0] radius 1 }
+} }
+prototype drilled = csg { material mandelbrot difference {
+    ellipsoid { center [0, 0, 0] radii [1, 0.9, 0.8] }
+    cylinder { center [0, 0, 0] radius 0.35 height 3 }
+} }
+prototype dragon = mesh { file "../ply/Dragon-ply/Dragon-ply.ply" up z fit [2.4, 2.6, 2.4] position [0, 0, 0] material blue }
+prototype title = text { font "C:\\Windows\\Fonts\\arial.ttf" value "INSTANCE LAB" size 2.4 depth 0.16 position [-10, 0, 0] material gold }
+instance { prototype ball position [-26.25, 1.1, -12] }
+instance { prototype oval position [-22.75, 1.1, -12] }
+instance { prototype cylinder_shape position [-19.25, 1.1, -12] }
+instance { prototype cone_shape position [-15.75, 1.1, -12] }
+instance { prototype parabola position [-12.25, 1.1, -12] }
+instance { prototype hourglass position [-8.75, 1.1, -12] }
+instance { prototype ring position [-5.25, 1.4, -12] rotation [75, 0, 0] }
+instance { prototype square position [-1.75, 1.1, -12] rotation [90, 0, 0] }
+instance { prototype pyramid position [1.75, 0, -12] }
+instance { prototype cat_shape position [3.4, 0, -13.75] }
+instance { prototype crystal_shape position [8.75, 0, -13.45] }
+instance { prototype letters position [12.25, 1.1, -12] }
+instance { prototype joined position [15.75, 1.1, -12] }
+instance { prototype lens position [19.25, 1.1, -12] }
+instance { prototype drilled position [22.75, 1.1, -12] rotation [0, 0, 30] }
+instance { prototype dragon position [26.25, 0, -12] rotation [0, -60, 0] }
+instance { prototype ball position [-26.25, 1.1, -8] material glass }
+instance { prototype oval position [-22.75, 1.1, -8] rotation [0, 30, 0] material marble }
+instance { prototype cylinder_shape position [-19.25, 1.1, -8] rotation [0, 25, 10] material wood }
+instance { prototype cone_shape position [-15.75, 1.1, -8] material gold }
+instance { prototype parabola position [-12.25, 1.1, -8] material julia }
+instance { prototype hourglass position [-8.75, 1.1, -8] material mandelbrot }
+instance { prototype ring position [-5.25, 1.4, -8] rotation [50, 30, 25] material blue }
+instance { prototype square position [-1.75, 1.1, -8] rotation [90, 20, 0] material wood }
+instance { prototype pyramid position [1.75, 0, -8] rotation [0, 30, 0] material gold }
+instance { prototype cat_shape position [3.5, 0, -6.15] rotation [0, 90, 0] material blue }
+instance { prototype crystal_shape position [7.3, 0, -8] rotation [0, 90, 0] material glass }
+instance { prototype letters position [12.25, 1.1, -8] rotation [0, 20, 0] material marble }
+instance { prototype joined position [15.75, 1.1, -8] rotation [0, 30, 0] material wood }
+instance { prototype lens position [19.25, 1.1, -8] rotation [0, 30, 0] material blue }
+instance { prototype drilled position [22.75, 1.1, -8] rotation [0, 0, 60] material gold }
+instance { prototype dragon position [26.25, 0, -8] rotation [0, -30, 0] material gold }
+instance { prototype ball position [-26.25, 1.1, -4] material gold }
+instance { prototype oval position [-22.75, 1.1, -4] rotation [0, 60, 0] material julia }
+instance { prototype cylinder_shape position [-19.25, 1.1, -4] material marble }
+instance { prototype cone_shape position [-15.75, 1.1, -4] material blue }
+instance { prototype parabola position [-12.25, 1.1, -4] material mandelbrot }
+instance { prototype hourglass position [-8.75, 1.1, -4] material tiles }
+instance { prototype ring position [-5.25, 1.4, -4] rotation [20, 60, 45] scale [1.2, 0.8, 1] material glass }
+instance { prototype square position [-1.75, 1.1, -4] rotation [90, 40, 0] material marble }
+instance { prototype pyramid position [1.75, 0, -4] rotation [0, 60, 0] material blue }
+instance { prototype cat_shape position [7.1, 0, -2.25] rotation [0, 180, 0] material wood }
+instance { prototype crystal_shape position [8.75, 0, -2.55] rotation [0, 180, 0] material gold }
+instance { prototype letters position [12.25, 1.1, -4] rotation [0, -20, 0] material wood }
+instance { prototype joined position [15.75, 1.1, -4] rotation [0, 60, 0] material gold }
+instance { prototype lens position [19.25, 1.1, -4] rotation [0, 60, 0] material julia }
+instance { prototype drilled position [22.75, 1.1, -4] rotation [0, 0, 90] material blue }
+instance { prototype dragon position [26.25, 0, -4] material ivory }
+instance { prototype ball position [-26.25, 1.1, 0] material wood }
+instance { prototype oval position [-22.75, 1.1, 0] rotation [0, 90, 0] material mandelbrot }
+instance { prototype cylinder_shape position [-19.25, 1.1, 0] material julia }
+instance { prototype cone_shape position [-15.75, 1.1, 0] material marble }
+instance { prototype parabola position [-12.25, 1.1, 0] material tiles }
+instance { prototype hourglass position [-8.75, 1.1, 0] material blue }
+instance { prototype ring position [-5.25, 1.4, 0] rotation [0, 90, 75] material wood }
+instance { prototype square position [-1.75, 1.1, 0] rotation [90, -20, 0] material mandelbrot }
+instance { prototype pyramid position [1.75, 0, 0] rotation [0, 90, 0] material marble }
+instance { prototype cat_shape position [7, 0, -1.85] rotation [0, 270, 0] material gold }
+instance { prototype crystal_shape position [10.2, 0, 0] rotation [0, 270, 0] material wood }
+instance { prototype letters position [12.25, 1.1, 0] material blue }
+instance { prototype joined position [15.75, 1.1, 0] rotation [0, 90, 0] material marble }
+instance { prototype lens position [19.25, 1.1, 0] rotation [0, 90, 0] material gold }
+instance { prototype drilled position [22.75, 1.1, 0] rotation [0, 0, 120] material wood }
+instance { prototype dragon position [26.25, 0, 0] rotation [0, 30, 0] material marble }
+instance { prototype ball position [-26.25, 1.1, 4] material marble }
+instance { prototype oval position [-22.75, 1.1, 4] rotation [0, 120, 0] material blue }
+instance { prototype cylinder_shape position [-19.25, 1.1, 4] material mandelbrot }
+instance { prototype cone_shape position [-15.75, 1.1, 4] material julia }
+instance { prototype parabola position [-12.25, 1.1, 4] material wood }
+instance { prototype hourglass position [-8.75, 1.1, 4] material glass }
+instance { prototype ring position [-5.25, 1.4, 4] rotation [40, 120, 15] material marble }
+instance { prototype square position [-1.75, 1.1, 4] rotation [90, -40, 0] material julia }
+instance { prototype pyramid position [1.75, 0, 4] rotation [0, 120, 0] material wood }
+instance { prototype cat_shape position [3.4, 0, 2.25] material marble }
+instance { prototype crystal_shape position [8.75, 0, 2.55] material blue }
+instance { prototype letters position [12.25, 1.1, 4] material julia }
+instance { prototype joined position [15.75, 1.1, 4] rotation [0, 120, 0] material mandelbrot }
+instance { prototype lens position [19.25, 1.1, 4] rotation [0, 120, 0] material marble }
+instance { prototype drilled position [22.75, 1.1, 4] rotation [0, 0, 150] material tiles }
+instance { prototype dragon position [26.25, 0, 4] rotation [0, 60, 0] material wood }
+instance { prototype ball position [-26.25, 1.1, 8] material mandelbrot }
+instance { prototype oval position [-22.75, 1.1, 8] rotation [0, 150, 0] scale [0.8, 1.2, 1] material gold }
+instance { prototype cylinder_shape position [-19.25, 1.1, 8] material tiles }
+instance { prototype cone_shape position [-15.75, 1.1, 8] material wood }
+instance { prototype parabola position [-12.25, 1.1, 8] material blue }
+instance { prototype hourglass position [-8.75, 1.1, 8] material marble }
+instance { prototype ring position [-5.25, 1.4, 8] rotation [65, 150, -25] material julia }
+instance { prototype square position [-1.75, 1.1, 8] rotation [90, 0, 0] material glass }
+instance { prototype pyramid position [1.75, 0, 8] rotation [0, 150, 0] material glass }
+instance { prototype cat_shape position [3.5, 0, 9.85] rotation [0, 90, 0] material julia }
+instance { prototype crystal_shape position [8.75, 0, 6.55] material marble }
+instance { prototype letters position [12.25, 1.1, 8] material glass }
+instance { prototype joined position [15.75, 1.1, 8] rotation [0, 150, 0] material julia }
+instance { prototype lens position [19.25, 1.1, 8] rotation [0, 150, 0] material wood }
+instance { prototype drilled position [22.75, 1.1, 8] rotation [0, 0, 180] material marble }
+instance { prototype dragon position [26.25, 0, 8] rotation [0, 90, 0] material glass }
+instance { prototype ring position [-21, 6, -8] rotation [15, 0, 0] material warm }
+instance { prototype ring position [-7, 6, -8] rotation [-15, 30, 0] material warm }
+instance { prototype ring position [7, 6, -8] rotation [15, 60, 0] material warm }
+instance { prototype ring position [21, 6, -8] rotation [-15, 90, 0] material warm }
+instance { prototype ring position [-21, 6, 4] rotation [-15, 0, 0] material warm }
+instance { prototype ring position [-7, 6, 4] rotation [15, 30, 0] material warm }
+instance { prototype ring position [7, 6, 4] rotation [-15, 60, 0] material warm }
+instance { prototype ring position [21, 6, 4] rotation [15, 90, 0] material warm }
+instance { prototype square position [-14, 21, -6] scale [5, 1, 3] material panel }
+instance { prototype square position [14, 21, -6] scale [5, 1, 3] material panel }
+instance { prototype square position [-14, 21, 6] scale [5, 1, 3] material panel }
+instance { prototype square position [14, 21, 6] scale [5, 1, 3] material panel }
+instance { prototype title position [0, 6, -28.05] }

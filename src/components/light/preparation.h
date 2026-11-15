@@ -25,7 +25,8 @@ inline double emitter_triangle_area(const std::vector<float4>& vertices, unsigne
 }
 
 inline void prepare_emitters(PreparedScene& scene,
-                             unsigned int first_rectangle_id = std::numeric_limits<unsigned int>::max()) {
+                             unsigned int first_rectangle_id = std::numeric_limits<unsigned int>::max(),
+                             bool all_materials = false) {
     constexpr double tau_squared = 39.478417604357434;
     scene.emitters.clear();
     scene.emitter_triangles.clear();
@@ -33,7 +34,8 @@ inline void prepare_emitters(PreparedScene& scene,
     for (auto& triangle : scene.triangle_materials) triangle.material.sampled_emitter = false;
     for (std::size_t i = 0; i < scene.primitives.size(); ++i) {
         const auto& primitive = scene.primitives[i];
-        if (primitive.material.kind != ShaderKind::emissive || primitive.geometry.kind != GeometryKind::torus)
+        if ((!all_materials && primitive.material.kind != ShaderKind::emissive) ||
+            primitive.geometry.kind != GeometryKind::torus)
             continue;
         const auto& torus = primitive.geometry.torus;
         for (const double radius : {double(torus.major_radius) - torus.minor_radius,
@@ -57,7 +59,7 @@ inline void prepare_emitters(PreparedScene& scene,
         bool emissive = false;
         double total = 0;
         for (auto i = first; i < end; ++i) {
-            if (scene.triangle_materials[i].material.kind != ShaderKind::emissive) continue;
+            if (!all_materials && scene.triangle_materials[i].material.kind != ShaderKind::emissive) continue;
             emissive = true;
             const auto area = emitter_triangle_area(scene.vertices, static_cast<unsigned int>(i));
             if (area == 0) continue;

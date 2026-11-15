@@ -7,6 +7,7 @@
 #include "components/scene/prepared.h"
 
 namespace hip_demo {
+struct GpuPrototype;
 
 struct PrimitiveData {
     const GpuPrimitive* objects;
@@ -36,6 +37,12 @@ struct TraceScene {
     const GpuEmitter* emitters = nullptr;
     unsigned int emitter_count = 0;
     const EmitterTriangle* emitter_triangles = nullptr;
+    hiprtScene instance_scene = nullptr;
+    const GpuInstance* instances = nullptr;
+    const GpuPrototype* prototypes = nullptr;
 };
 
+struct GpuPrototype {
+    TraceScene scene;
+};
 }

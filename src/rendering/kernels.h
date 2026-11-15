@@ -6,6 +6,7 @@
 
 namespace hip_demo {
 
+template<bool Instanced>
 __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene scene, int width, int height,
                               int first_sample, int sample_end, int sample_count) {
     const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
@@ -21,7 +22,7 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
     float3 accumulated = first_sample == 0 ? float3{0.0f, 0.0f, 0.0f} : sums[pixel_index];
 
     for (int sample = first_sample; sample < sample_end; ++sample) {
-        accumulated = accumulated + sample_pixel(x, y, width, height, sample, forward, right, up, scene);
+        accumulated = accumulated + sample_pixel<Instanced>(x, y, width, height, sample, forward, right, up, scene);
     }
 
     if (sample_end == sample_count) {
@@ -31,6 +32,7 @@ __global__ void render_kernel(std::uint32_t* pixels, float3* sums, TraceScene sc
     }
 }
 
+template<bool Instanced>
 __global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* states, TraceScene scene,
                                        int width, int height, int first_sample, int sample_end, int sample_count,
                                        SamplingOptions sampling) {
@@ -48,7 +50,7 @@ __global__ void render_adaptive_kernel(std::uint32_t* pixels, AdaptivePixel* sta
     const float3 right = normalize(cross(forward, {0.0f, 1.0f, 0.0f}));
     const float3 up = cross(right, forward);
     for (int sample = first_sample; sample < sample_end; ++sample) {
-        add_adaptive_sample(pixel, sample_pixel(x, y, width, height, sample, forward, right, up, scene,
+        add_adaptive_sample(pixel, sample_pixel<Instanced>(x, y, width, height, sample, forward, right, up, scene,
                                                 &pixel.specular));
     }
     pixel.done = sample_end == sample_count || adaptive_converged(pixel, &sampling);

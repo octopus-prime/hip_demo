@@ -2,6 +2,7 @@
 
 #include "components/geometry/text/outline.h"
 #include "components/light/gpu_model.h"
+#include "components/instance/gpu_model.h"
 #include <hip/hip_runtime.h>
 #include <vector>
 
@@ -25,6 +26,8 @@ struct PreparedScene {
     unsigned int glyph_count = 0;
     std::vector<GpuEmitter> emitters;
     std::vector<EmitterTriangle> emitter_triangles;
+    std::vector<PreparedScene> prototypes;
+    std::vector<GpuInstance> instances;
 };
 
 }
