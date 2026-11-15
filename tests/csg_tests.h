@@ -1,11 +1,11 @@
 #pragma once
 
-#include "surface/csg.h"
+#include "geometry/csg.h"
 #include <filesystem>
 
 namespace hip_demo {
 
-__global__ void check_csg(TraceScene scene, const SceneCsg* objects, const SceneCsgLeaf* leaves,
+__global__ void check_csg(TraceScene scene, const GpuCsg* objects, const GpuCsgLeaf* leaves,
                           unsigned int* failures) {
     struct Probe {
         unsigned int object;
@@ -67,7 +67,7 @@ __global__ void check_csg(TraceScene scene, const SceneCsg* objects, const Scene
     }
     Hit shaded{};
     if (!hit_custom_objects({{8, 1, 0}, {0, 0, 1}}, shaded, scene) ||
-        shaded.object_id != scene.primitive_count + 2 || shaded.material != Material::phong ||
+        shaded.object_id != scene.primitive_count + 2 || shaded.material != ShaderKind::phong ||
         shaded.albedo.z != 0.9f || !shaded.front_face || shaded.normal.z > -0.999f)
         failed |= 1u << 30;
     if (!hit_custom_objects({{10, 3, 4}, {0, 0, -1}}, shaded, scene) ||
@@ -78,12 +78,13 @@ __global__ void check_csg(TraceScene scene, const SceneCsg* objects, const Scene
 
 inline void run_csg_tests(int device, const std::filesystem::path& directory) {
     const auto description = load_scene_description((directory / "csg.hipscene").string());
-    const HiprtScene scene(device, description);
-    auto objects = allocate_device<SceneCsg>(description.csgs.size(), "Allocating CSG test objects");
-    auto leaves = allocate_device<SceneCsgLeaf>(description.csg_leaves.size(), "Allocating CSG test leaves");
-    check_hip(hipMemcpy(objects.get(), description.csgs.data(), description.csgs.size() * sizeof(SceneCsg),
+    const auto prepared = prepare_scene(description);
+    const HiprtScene scene(device, prepared);
+    auto objects = allocate_device<GpuCsg>(prepared.csgs.size(), "Allocating CSG test objects");
+    auto leaves = allocate_device<GpuCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG test leaves");
+    check_hip(hipMemcpy(objects.get(), prepared.csgs.data(), prepared.csgs.size() * sizeof(GpuCsg),
                        hipMemcpyHostToDevice), "Uploading CSG test objects");
-    check_hip(hipMemcpy(leaves.get(), description.csg_leaves.data(), description.csg_leaves.size() * sizeof(SceneCsgLeaf),
+    check_hip(hipMemcpy(leaves.get(), prepared.csg_leaves.data(), prepared.csg_leaves.size() * sizeof(GpuCsgLeaf),
                        hipMemcpyHostToDevice), "Uploading CSG test leaves");
     auto failure = allocate_device<unsigned int>(1, "Allocating CSG test result");
     hipLaunchKernelGGL(check_csg, dim3(1), dim3(1), 0, 0, scene.scene(), objects.get(), leaves.get(), failure.get());

@@ -1,23 +1,22 @@
 #pragma once
 
-#include "surface/primitive.h"
-#include "surface/text_solid.h"
+#include "geometry/primitive.h"
+#include "geometry/text_solid.h"
 
 namespace hip_demo {
 
-__device__ inline Ray csg_local_ray(const Ray& ray, const ScenePrimitive& shape) {
-    return {rotate_x(ray.origin - vector3(shape.center), -shape.tilt_sine, shape.tilt_cosine),
-            rotate_x(ray.direction, -shape.tilt_sine, shape.tilt_cosine)};
+__device__ inline bool csg_same_shape(const GpuGeometry& a, const GpuGeometry& b) {
+    if (a.kind != b.kind) return false;
+    if (a.kind == GeometryKind::sphere)
+        return a.sphere.center.x == b.sphere.center.x && a.sphere.center.y == b.sphere.center.y &&
+            a.sphere.center.z == b.sphere.center.z && a.sphere.radius == b.sphere.radius;
+    return a.torus.center.x == b.torus.center.x && a.torus.center.y == b.torus.center.y &&
+        a.torus.center.z == b.torus.center.z && a.torus.major_radius == b.torus.major_radius &&
+        a.torus.minor_radius == b.torus.minor_radius && a.torus.tilt_sine == b.torus.tilt_sine &&
+        a.torus.tilt_cosine == b.torus.tilt_cosine;
 }
 
-__device__ inline bool csg_same_shape(const ScenePrimitive& a, const ScenePrimitive& b) {
-    return a.sphere == b.sphere && a.center.x == b.center.x && a.center.y == b.center.y &&
-        a.center.z == b.center.z && (a.sphere ? a.radius == b.radius :
-        a.major_radius == b.major_radius && a.minor_radius == b.minor_radius &&
-        a.tilt_sine == b.tilt_sine && a.tilt_cosine == b.tilt_cosine);
-}
-
-__device__ inline bool csg_same_shape(const SceneCsgLeaf& a, const SceneCsgLeaf& b) {
+__device__ inline bool csg_same_shape(const GpuCsgLeaf& a, const GpuCsgLeaf& b) {
     if (a.text || b.text) return a.text && b.text && a.text_index == b.text_index;
     return csg_same_shape(a.shape, b.shape);
 }
@@ -173,8 +172,8 @@ __device__ inline bool csg_cache_glyph(CsgEventCache& cache, const Ray& ray, con
     return true;
 }
 
-__device__ inline bool csg_cache_build(CsgEventCache& cache, const Ray& ray, const SceneCsg& object,
-                                      const SceneCsgLeaf* leaves, TextGeometryView text,
+__device__ inline bool csg_cache_build(CsgEventCache& cache, const Ray& ray, const GpuCsg& object,
+                                      const GpuCsgLeaf* leaves, TextGeometryView text,
                                       float minimum, float maximum) {
     if (object.leaf_count > CsgEventCache::leaf_capacity) return false;
     cache.leaf_count = object.leaf_count;
@@ -192,23 +191,20 @@ __device__ inline bool csg_cache_build(CsgEventCache& cache, const Ray& ray, con
             for (std::uint32_t glyph = 0; glyph < leaf.glyph_count; ++glyph)
                 if (!csg_cache_glyph(cache, ray, text.glyphs[leaf.first_glyph + glyph], text.curves,
                                      i, leaf.first_glyph + glyph, minimum, maximum)) return false;
-        } else if (leaf.shape.sphere) {
-            const auto center = vector3(leaf.shape.center);
-            const auto roots = sphere_roots(ray, center, leaf.shape.radius);
-            const auto offset = ray.origin - center;
+        } else if (leaf.shape.kind == GeometryKind::sphere) {
+            const auto& sphere = leaf.shape.sphere;
+            const auto roots = sphere.intersections(ray);
             for (int root = 0; root < roots.count; ++root) {
                 const float t = roots.values[root];
                 const bool candidate = t >= minimum && t < maximum;
-                const float3 normal = candidate ? normalize({fmaf(t, ray.direction.x, offset.x),
-                    fmaf(t, ray.direction.y, offset.y), fmaf(t, ray.direction.z, offset.z)}) : float3{};
+                const float3 normal = candidate ? sphere.normal_at(ray, t) : float3{};
                 // Do not merge primitive roots: even multiplicities cancel occupancy.
                 if (!cache.add({t, normal, i, CsgEventCache::primitive, 0, 0, false, candidate, false},
                                 maximum, cache.event_count)) return false;
             }
         } else {
-            const auto& shape = leaf.shape;
-            const auto torus = torus_roots(csg_local_ray(ray, shape), {}, shape.major_radius,
-                                           shape.minor_radius, minimum, maximum);
+            const auto& shape = leaf.shape.torus;
+            const auto torus = shape.intersections(ray, minimum, maximum);
             for (int root = 0; root < torus.roots.count; ++root) {
                 const float t = torus.distance(root);
                 const bool candidate = t >= minimum && t < maximum;
@@ -222,8 +218,8 @@ __device__ inline bool csg_cache_build(CsgEventCache& cache, const Ray& ray, con
     return true;
 }
 
-__device__ inline bool csg_cache_contains(const SceneCsg& object, const SceneCsgLeaf* leaves,
-                                         std::uint64_t mask, const SceneCsgLeaf* override_leaf = nullptr,
+__device__ inline bool csg_cache_contains(const GpuCsg& object, const GpuCsgLeaf* leaves,
+                                         std::uint64_t mask, const GpuCsgLeaf* override_leaf = nullptr,
                                          bool override_inside = false) {
     auto instruction = object.entry;
     while (instruction != csg_inside && instruction != csg_outside) {
@@ -235,8 +231,8 @@ __device__ inline bool csg_cache_contains(const SceneCsg& object, const SceneCsg
     return instruction == csg_inside;
 }
 
-__device__ __noinline__ inline bool intersect_csg_cached(const Ray& ray, const SceneCsg& object,
-    const SceneCsgLeaf* leaves, float minimum, float maximum, Hit& hit, TextGeometryView text, bool& usable) {
+__device__ __noinline__ inline bool intersect_csg_cached(const Ray& ray, const GpuCsg& object,
+    const GpuCsgLeaf* leaves, float minimum, float maximum, Hit& hit, TextGeometryView text, bool& usable) {
     CsgEventCache cache;
     usable = csg_cache_build(cache, ray, object, leaves, text, minimum, maximum);
     if (!usable) return false;

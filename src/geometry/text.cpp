@@ -1,4 +1,4 @@
-#include "surface/text.h"
+#include "geometry/text.h"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -101,7 +101,8 @@ struct OutlineBuilder {
 };
 }
 
-void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::uint32_t object_id) {
+void append_text_geometry(TextGeometry& geometry, const hip_demo::ExtrudedText& text,
+                          std::uint32_t object_id, GpuMaterial material) {
     if (!std::isfinite(text.size) || text.size <= 0 || !std::isfinite(text.depth) || text.depth <= 0 ||
         !std::isfinite(text.position.x) || !std::isfinite(text.position.y) || !std::isfinite(text.position.z)) {
         throw std::runtime_error("Text size/depth must be positive and its position finite");
@@ -168,7 +169,7 @@ void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::ui
                 !std::isfinite(glyph.maximum.z) || glyph.maximum.z <= glyph.minimum.z) {
                 throw std::runtime_error("Text geometry exceeds the finite coordinate range or depth precision");
             }
-            glyph.material = text.material;
+            glyph.material = material;
             glyph.depth = text.depth;
             glyph.first_curve = static_cast<std::uint32_t>(geometry.curves.size());
             glyph.curve_count = static_cast<std::uint32_t>(builder.curves.size());

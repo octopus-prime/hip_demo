@@ -17,19 +17,18 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
         if (!hit_scene(ray, hit, scene)) {
             break;
         }
-        const float3 geometric_normal = hit.tiled_floor
-            ? float3{0.0f, hit.front_face ? 1.0f : -1.0f, 0.0f} : hit.normal;
+        const float3 geometric_normal = hit.geometric_normal;
 
         if (bounce == 0 && specular_primary &&
-            (hit.material == Material::glass || hit.material == Material::metal || hit.material == Material::phong)) {
+            (hit.material == ShaderKind::glass || hit.material == ShaderKind::metal || hit.material == ShaderKind::phong)) {
             *specular_primary = true;
         }
-        if (hit.material == Material::emissive) {
+        if (hit.material == ShaderKind::emissive) {
             if (include_emission && hit.front_face) {
                 radiance = radiance + throughput * vector3(scene.settings->light.radiance);
             }
             break;
-        } else if (hit.material == Material::metal || hit.material == Material::glass) {
+        } else if (hit.material == ShaderKind::metal || hit.material == ShaderKind::glass) {
             include_emission = true;
         } else {
             LightSample light{};
@@ -49,7 +48,7 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
             Hit shadow_hit{};
             constexpr float shadow_tolerance = 0.001f;
             if (cosine > 0.0f && light_cosine > 0.0f &&
-                (!hit.tiled_floor || dot(geometric_normal, light_direction) > 0.0f) &&
+                (!hit.has_normal_map || dot(geometric_normal, light_direction) > 0.0f) &&
                 (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
                  shadow_hit.distance >= distance - shadow_tolerance)) {
                 const float3 scattering = evaluate_scattering(ray, hit, light_direction, cosine);
@@ -62,8 +61,8 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
         if (!scatter(ray, hit, random, throughput)) {
             break;
         }
-        if (hit.material != Material::metal && hit.material != Material::glass &&
-            hit.tiled_floor && dot(ray.direction, geometric_normal) <= 0.0f) {
+        if (hit.material != ShaderKind::metal && hit.material != ShaderKind::glass &&
+            hit.has_normal_map && dot(ray.direction, geometric_normal) <= 0.0f) {
             break;
         }
         ray.origin = hit.point + geometric_normal * (dot(ray.direction, geometric_normal) > 0.0f ? 0.002f : -0.002f);

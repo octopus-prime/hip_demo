@@ -1,6 +1,6 @@
 #pragma once
 
-#include "surface/hit.h"
+#include "geometry/hit.h"
 #include "math/random.h"
 #include "scene/defaults.h"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "surface/hit.h"
+#include "geometry/hit.h"
 
 namespace hip_demo {
 
@@ -34,13 +34,15 @@ __device__ inline void apply_floor_tiles(Hit& hit, const Ray& ray) {
     const float3 tile_color = variation * float3{0.73f, 0.72f, 0.69f};
     const float3 grout_color{0.30f, 0.29f, 0.28f};
     hit.albedo = grout_color * (1.0f - tile) + tile_color * tile;
-    const float3 outward = normalize({-floor_grout_depth * slope_x * edge_z, 1.0f,
-                                      -floor_grout_depth * slope_z * edge_x});
+    const auto base = hit.front_face ? hit.geometric_normal : -hit.geometric_normal;
+    const float3 gradient{floor_grout_depth * slope_x * edge_z, 0,
+                           floor_grout_depth * slope_z * edge_x};
+    const float3 outward = normalize(base - gradient + dot(gradient, base) * base);
     const float3 shading_normal = hit.front_face ? outward : -outward;
     if (dot(ray.direction, shading_normal) < 0.0f) {
         hit.normal = shading_normal;
     }
-    hit.tiled_floor = true;
+    hit.has_normal_map = true;
 }
 
 }

@@ -1,4 +1,4 @@
-#include "surface/mesh.h"
+#include "geometry/mesh.h"
 
 #include "rply.h"
 

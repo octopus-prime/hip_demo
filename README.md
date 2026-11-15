@@ -372,6 +372,51 @@ and `FETCHCONTENT_SOURCE_DIR_ZLIB` to local source directories.
 On Linux/WSL, use the same build commands with SDK 7.1 and a compatible GPU
 environment; run `./build/bin/hiprt_demo` instead of the Windows executable.
 
+## Scene model and GPU representation
+
+The CPU scene uses standard graphics terminology:
+
+- **Object** combines a **Geometry** and a **Material**.
+- **Geometry** is a `std::variant` of sphere, torus, mesh, extruded text and CSG.
+  Geometry contains no material parameters.
+- **Material** is a `std::variant` of diffuse, Phong, metal, glass and emissive
+  descriptions. Each alternative supplies parameters for its shader/BSDF code.
+- **Texture** supplies albedo values independently of the shader. Constant
+  colors and the existing procedural patterns are texture alternatives; metal
+  roughness remains a scalar.
+
+For example, using the types in [scene/types.h](src/scene/types.h):
+
+```cpp
+using namespace hip_demo;
+Object gold{
+    Sphere{{0, 1, 0}, 0.5f},
+    Metal{ConstantColor{{0.8f, 0.6f, 0.1f}}, 0.15f}
+};
+```
+
+Sphere and torus are value types with bounds and device intersection methods,
+not a virtual class hierarchy. Their shared declarations are in
+[geometry/analytic.h](src/geometry/analytic.h), with intersection implementations
+in [geometry/sphere.h](src/geometry/sphere.h) and
+[geometry/torus.h](src/geometry/torus.h).
+
+The pipeline is syntax AST -> validated CPU objects -> prepared GPU data.
+[prepare_scene](src/building/geometry.h) lowers variants to explicitly tagged,
+trivially copyable [GPU payloads](src/gpu/types.h), compiles CSG trees into
+Boolean jump programs, and prepares mesh/font geometry. No `std::variant`
+dispatch or virtual calls are needed on the GPU. Intersection code determines
+geometry; traversal attaches the material and evaluates its textures before
+shader/BSDF evaluation. Geometric normals remain separate from texture-modified
+shading normals.
+
+Existing scene syntax and CSG root-material behavior are unchanged.
+Procedural material textures can be selected through the C++ scene model;
+the scene-file grammar still exposes them only for room walls. Existing
+procedural coordinate mappings are retained rather than adding a new UV API.
+GPU object IDs retain their grouped order: primitives, CSG roots, standalone
+text objects, then meshes; they are not indices into the CPU `objects` vector.
+
 ## Tests
 
 ```powershell

@@ -35,7 +35,7 @@ __global__ void check_analytic_intersections(unsigned int* failures) {
     for (unsigned int i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         const auto& test = cases[i];
         Hit hit{};
-        const bool found = hit_torus(test.ray, {}, test.maximum, hit, 2.0f, 0.5f);
+        const bool found = Torus{{}, 2.0f, 0.5f}.intersect(test.ray, 0.001f, test.maximum, hit);
         if (found != test.found || (found &&
             (fabsf(hit.distance - test.distance) > 0.0002f ||
              fabsf(dot(hit.normal, test.normal)) < 0.9999f ||
@@ -43,15 +43,16 @@ __global__ void check_analytic_intersections(unsigned int* failures) {
             failed |= 1u << i;
     }
     Hit hit{};
-    if (!hit_torus({{7, 4, 5}, {-1, 0, 0}}, {3, 4, 5}, 10, hit, 2, 0.5f) ||
+    if (!Torus{{3, 4, 5}, 2, 0.5f}.intersect({{7, 4, 5}, {-1, 0, 0}}, 0.001f, 10, hit) ||
         fabsf(hit.distance - 1.5f) > 0.00002f) failed |= 1u << 17;
-    if (!hit_sphere({{0, 0, 4}, {0, 0, -2}}, {}, 1, 10, hit) ||
+    const Sphere sphere{{}, 1};
+    if (!sphere.intersect({{0, 0, 4}, {0, 0, -2}}, 0.001f, 10, hit) ||
         fabsf(hit.distance - 1.5f) > 0.00001f || hit.normal.z < 0.9999f ||
-        !hit_sphere({{0, 0, 0}, {0, 0, 2}}, {}, 1, 10, hit) ||
+        !sphere.intersect({{0, 0, 0}, {0, 0, 2}}, 0.001f, 10, hit) ||
         fabsf(hit.distance - 0.5f) > 0.00001f ||
-        !hit_sphere({{1, 0, 4}, {0, 0, -1}}, {}, 1, 10, hit) ||
+        !sphere.intersect({{1, 0, 4}, {0, 0, -1}}, 0.001f, 10, hit) ||
         fabsf(hit.distance - 4.0f) > 0.00001f ||
-        hit_sphere({{1.0001f, 0, 4}, {0, 0, -1}}, {}, 1, 10, hit))
+        sphere.intersect({{1.0001f, 0, 4}, {0, 0, -1}}, 0.001f, 10, hit))
         failed |= 1u << 18;
     // Independent parametric torus points and normals, including oblique/non-unit rays.
     for (int ring = 0; ring < 16; ++ring) {
@@ -65,7 +66,7 @@ __global__ void check_analytic_intersections(unsigned int* failures) {
                 const float3 displacement = 0.25f * normal +
                     (oblique ? 0.2f : 0.0f) * float3{-radial.z, 0, radial.x};
                 const Ray ray{point + displacement, -2.0f * displacement};
-                if (!hit_torus(ray, {}, 10, hit, 2, 0.5f) ||
+                if (!Torus{{}, 2, 0.5f}.intersect(ray, 0.001f, 10, hit) ||
                     fabsf(hit.distance - 0.5f) > 0.0001f || dot(hit.normal, normal) < 0.9999f)
                     failed |= 1u << 19;
             }

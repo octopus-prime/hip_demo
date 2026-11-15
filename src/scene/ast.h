@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/types.h"
+#include "scene/common.h"
 
 #include <array>
 #include <cstddef>
@@ -19,13 +19,13 @@ struct Vector {
 
 struct MaterialValue {
     Vector albedo;
-    Material kind = Material::diffuse;
+    ShaderKind kind = ShaderKind::diffuse;
     double roughness = 1;
 };
 
-struct Surface {
+struct TextureValue {
     Vector color;
-    SurfaceKind kind = SurfaceKind::color;
+    TextureKind kind = TextureKind::color;
 };
 
 struct Camera {
@@ -37,7 +37,7 @@ struct Camera {
 struct Room {
     Position where;
     Vector size;
-    Surface floor, ceiling, back, left, right;
+    TextureValue floor, ceiling, back, left, right;
 };
 
 struct NamedMaterial {

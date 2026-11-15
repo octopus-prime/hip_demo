@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gpu/scene_view.h"
-#include "surface/primitive.h"
-#include "surface/csg.h"
+#include "geometry/primitive.h"
+#include "geometry/csg.h"
 
 // The linked HIP RT device library calls these global dispatch functions.
 __device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, const hiprtFuncTableHeader& table,

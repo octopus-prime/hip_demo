@@ -1,7 +1,7 @@
 #pragma once
 
-#include "surface/procedural_mesh.h"
-#include "surface/mesh.h"
+#include "geometry/procedural_mesh.h"
+#include "geometry/mesh.h"
 #include <algorithm>
 #include <limits>
 #include <stdexcept>

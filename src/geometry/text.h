@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/types.h"
+#include "gpu/types.h"
 #include "math/polynomial.h"
 
 #include <cmath>
@@ -19,7 +20,7 @@ struct TextCurve {
 
 struct TextGlyph {
     SceneVector position, minimum, maximum;
-    SceneMaterial material;
+    GpuMaterial material;
     float depth = 0, normal_sign = 1;
     std::uint32_t first_curve = 0, curve_count = 0, object_id = 0;
     bool even_odd = false;
@@ -35,7 +36,8 @@ struct TextGeometryView {
     const TextCurve* curves = nullptr;
 };
 
-void append_text_geometry(TextGeometry& geometry, const SceneText& text, std::uint32_t object_id);
+void append_text_geometry(TextGeometry& geometry, const hip_demo::ExtrudedText& text,
+                          std::uint32_t object_id, GpuMaterial material = {});
 
 namespace text_detail {
 TEXT_HD inline float evaluate(const float* p, float u) {

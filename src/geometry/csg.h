@@ -1,36 +1,29 @@
 #pragma once
 
-#include "surface/csg_events.h"
+#include "geometry/csg_events.h"
 
 namespace hip_demo {
 
-__device__ inline PolynomialRoots csg_leaf_roots(const Ray& ray, const ScenePrimitive& shape,
+__device__ inline PolynomialRoots csg_leaf_roots(const Ray& ray, const GpuGeometry& shape,
                                                 float minimum, float maximum) {
-    if (shape.sphere) return sphere_roots(ray, vector3(shape.center), shape.radius);
-    const auto torus = torus_roots(csg_local_ray(ray, shape), {}, shape.major_radius,
-                                   shape.minor_radius, minimum, maximum);
+    if (shape.kind == GeometryKind::sphere) return shape.sphere.intersections(ray);
+    const auto torus = shape.torus.intersections(ray, minimum, maximum);
     PolynomialRoots roots;
     for (int i = 0; i < torus.roots.count; ++i) roots.add(torus.distance(i));
     return roots;
 }
 
-__device__ inline float3 csg_leaf_normal(const Ray& ray, const ScenePrimitive& shape, float distance,
+__device__ inline float3 csg_leaf_normal(const Ray& ray, const GpuGeometry& shape, float distance,
                                         float minimum, float maximum) {
-    if (shape.sphere) {
-        const float3 offset = ray.origin - vector3(shape.center);
-        return normalize({fmaf(distance, ray.direction.x, offset.x),
-                          fmaf(distance, ray.direction.y, offset.y),
-                          fmaf(distance, ray.direction.z, offset.z)});
-    }
-    const auto torus = torus_roots(csg_local_ray(ray, shape), {}, shape.major_radius,
-                                   shape.minor_radius, minimum, maximum);
+    if (shape.kind == GeometryKind::sphere) return shape.sphere.normal_at(ray, distance);
+    const auto torus = shape.torus.intersections(ray, minimum, maximum);
     int closest = 0;
     for (int i = 1; i < torus.roots.count; ++i)
         if (fabsf(torus.distance(i) - distance) < fabsf(torus.distance(closest) - distance)) closest = i;
-    return rotate_x(torus.normal(closest), shape.tilt_sine, shape.tilt_cosine);
+    return rotate_x(torus.normal(closest), shape.torus.tilt_sine, shape.torus.tilt_cosine);
 }
 
-__device__ inline bool csg_leaf_contains(const Ray& ray, const SceneCsgLeaf& leaf, TextGeometryView text,
+__device__ inline bool csg_leaf_contains(const Ray& ray, const GpuCsgLeaf& leaf, TextGeometryView text,
                                          float boundary, bool inclusive, float minimum, float maximum) {
     if (leaf.text) {
         const SceneVector origin{ray.origin.x, ray.origin.y, ray.origin.z};
@@ -49,7 +42,7 @@ __device__ inline bool csg_leaf_contains(const Ray& ray, const SceneCsgLeaf& lea
     return inside;
 }
 
-__device__ inline bool csg_leaf_boundary(const Ray& ray, const SceneCsgLeaf& leaf, TextGeometryView text,
+__device__ inline bool csg_leaf_boundary(const Ray& ray, const GpuCsgLeaf& leaf, TextGeometryView text,
                                          float minimum, float maximum, TextIntersection& hit,
                                          bool crossing_only = false) {
     if (leaf.text) {
@@ -83,10 +76,10 @@ __device__ inline bool csg_leaf_boundary(const Ray& ray, const SceneCsgLeaf& lea
     return false;
 }
 
-__device__ inline bool csg_contains(const Ray& ray, const SceneCsg& object, const SceneCsgLeaf* leaves,
+__device__ inline bool csg_contains(const Ray& ray, const GpuCsg& object, const GpuCsgLeaf* leaves,
                                     TextGeometryView text, float boundary, bool inclusive,
                                     float minimum, float maximum,
-                                    const SceneCsgLeaf* override_leaf = nullptr, bool override_inside = false) {
+                                    const GpuCsgLeaf* override_leaf = nullptr, bool override_inside = false) {
     auto instruction = object.entry;
     while (instruction != csg_inside && instruction != csg_outside) {
         const auto& leaf = leaves[instruction];
@@ -97,7 +90,7 @@ __device__ inline bool csg_contains(const Ray& ray, const SceneCsg& object, cons
     return instruction == csg_inside;
 }
 
-__device__ inline bool intersect_csg_uncached(const Ray& ray, const SceneCsg& object, const SceneCsgLeaf* leaves,
+__device__ inline bool intersect_csg_uncached(const Ray& ray, const GpuCsg& object, const GpuCsgLeaf* leaves,
                                     float minimum, float maximum, Hit& hit, TextGeometryView text = {}) {
     float cursor = minimum;
     bool first = true;
@@ -154,7 +147,7 @@ __device__ inline bool intersect_csg_uncached(const Ray& ray, const SceneCsg& ob
     return false;
 }
 
-__device__ inline bool intersect_csg(const Ray& ray, const SceneCsg& object, const SceneCsgLeaf* leaves,
+__device__ inline bool intersect_csg(const Ray& ray, const GpuCsg& object, const GpuCsgLeaf* leaves,
                                     float minimum, float maximum, Hit& hit, TextGeometryView text = {}) {
     for (std::uint32_t i = 0; i < object.leaf_count; ++i) {
         if (!leaves[object.first_leaf + i].text) continue;

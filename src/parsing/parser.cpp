@@ -13,7 +13,7 @@ namespace bp = boost::parser;
 using Position = std::string_view::const_iterator;
 using scene_ast::Vector;
 using scene_ast::MaterialValue;
-using scene_ast::Surface;
+using scene_ast::TextureValue;
 
 struct Camera {
     Position where;
@@ -24,7 +24,7 @@ struct Camera {
 struct Room {
     Position where;
     Vector size;
-    Surface floor, ceiling, back, left, right;
+    TextureValue floor, ceiling, back, left, right;
 };
 
 struct NamedMaterial {
@@ -143,14 +143,14 @@ bp::rule<struct scalar_p_, double> scalar_p = "number";
 bp::rule<struct vector2_p_, std::array<double, 2>> vector2_p = "2D vector";
 bp::rule<struct vector_p_, Vector> vector_p = "3D vector";
 bp::rule<struct camera_p_, Camera> camera_p = "camera";
-bp::rule<struct surface_p_, Surface> surface_p = "color surface";
-bp::rule<struct wood_p_, Surface> wood_p = "wood surface";
-bp::rule<struct marble_p_, Surface> marble_p = "marble surface";
-bp::rule<struct floor_p_, Surface> floor_p = "floor surface";
-bp::rule<struct ceiling_p_, Surface> ceiling_p = "ceiling surface";
-bp::rule<struct back_p_, Surface> back_p = "back surface";
-bp::rule<struct left_p_, Surface> left_p = "left surface";
-bp::rule<struct right_p_, Surface> right_p = "right surface";
+bp::rule<struct surface_p_, TextureValue> surface_p = "color surface";
+bp::rule<struct wood_p_, TextureValue> wood_p = "wood surface";
+bp::rule<struct marble_p_, TextureValue> marble_p = "marble surface";
+bp::rule<struct floor_p_, TextureValue> floor_p = "floor surface";
+bp::rule<struct ceiling_p_, TextureValue> ceiling_p = "ceiling surface";
+bp::rule<struct back_p_, TextureValue> back_p = "back surface";
+bp::rule<struct left_p_, TextureValue> left_p = "left surface";
+bp::rule<struct right_p_, TextureValue> right_p = "right surface";
 bp::rule<struct room_p_, Room> room_p = "room";
 bp::rule<struct diffuse_p_, MaterialValue> diffuse_p = "diffuse material";
 bp::rule<struct phong_p_, MaterialValue> phong_p = "Phong material";
@@ -186,22 +186,22 @@ auto vector_p_def = bp::lit('[') > scalar_p > ',' > scalar_p > ',' > scalar_p > 
 auto camera_p_def = position_p >> bp::lit("camera") > '{'
     > bp::lit("position") > vector_p > bp::lit("target") > vector_p
     > keyword("half_view_height") > scalar_p > '}';
-auto surface_p_def = bp::lit("color") > vector_p > bp::attr(SurfaceKind::color);
-auto wood_p_def = keyword("wood_detail") >> bp::attr(Surface{{}, SurfaceKind::wood});
-auto marble_p_def = keyword("marble_detail") >> bp::attr(Surface{{}, SurfaceKind::marble});
-auto floor_p_def = surface_p | (keyword("tiles_detail") >> bp::attr(Surface{{}, SurfaceKind::tiles}));
+auto surface_p_def = bp::lit("color") > vector_p > bp::attr(TextureKind::color);
+auto wood_p_def = keyword("wood_detail") >> bp::attr(TextureValue{{}, TextureKind::wood});
+auto marble_p_def = keyword("marble_detail") >> bp::attr(TextureValue{{}, TextureKind::marble});
+auto floor_p_def = surface_p | (keyword("tiles_detail") >> bp::attr(TextureValue{{}, TextureKind::tiles}));
 auto ceiling_p_def = surface_p | wood_p;
 auto back_p_def = surface_p | wood_p | marble_p;
-auto left_p_def = surface_p | (keyword("mandelbrot_detail") >> bp::attr(Surface{{}, SurfaceKind::mandelbrot}));
-auto right_p_def = surface_p | (keyword("julia_detail") >> bp::attr(Surface{{}, SurfaceKind::julia}));
+auto left_p_def = surface_p | (keyword("mandelbrot_detail") >> bp::attr(TextureValue{{}, TextureKind::mandelbrot}));
+auto right_p_def = surface_p | (keyword("julia_detail") >> bp::attr(TextureValue{{}, TextureKind::julia}));
 auto room_p_def = position_p >> bp::lit("room") > '{' > bp::lit("size") > vector_p
     > keyword("floor") > floor_p > keyword("ceiling") > ceiling_p > keyword("back") > back_p
     > keyword("left") > left_p > keyword("right") > right_p > '}';
 
-auto diffuse_p_def = bp::lit("diffuse") > vector_p > bp::attr(Material::diffuse) > bp::attr(1.0);
-auto phong_p_def = bp::lit("phong") > vector_p > bp::attr(Material::phong) > bp::attr(0.0);
-auto metal_p_def = bp::lit("metal") > vector_p > bp::attr(Material::metal) > keyword("roughness") > scalar_p;
-auto glass_p_def = bp::lit("glass") > vector_p > bp::attr(Material::glass) > bp::attr(0.0);
+auto diffuse_p_def = bp::lit("diffuse") > vector_p > bp::attr(ShaderKind::diffuse) > bp::attr(1.0);
+auto phong_p_def = bp::lit("phong") > vector_p > bp::attr(ShaderKind::phong) > bp::attr(0.0);
+auto metal_p_def = bp::lit("metal") > vector_p > bp::attr(ShaderKind::metal) > keyword("roughness") > scalar_p;
+auto glass_p_def = bp::lit("glass") > vector_p > bp::attr(ShaderKind::glass) > bp::attr(0.0);
 auto shader_p_def = diffuse_p | phong_p | metal_p | glass_p;
 auto material_p_def = position_p >> keyword("material") > identifier_p > '=' > shader_p;
 auto rectangle_light_p_def = position_p >> bp::lit("ceiling_rectangle") > '{'

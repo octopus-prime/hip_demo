@@ -32,9 +32,16 @@ inline int run_demo(int argc, char** argv) {
         const auto& sampling = render.sampling;
         std::cout << "Rendering on " << device.properties.name << " ("
                   << device.properties.gcnArchName << ")...\n";
-        std::cout << "Scene: " << description.primitives.size() << " primitives, "
-                  << description.meshes.size() << " meshes, " << description.texts.size() << " text objects, "
-                  << description.csgs.size() << " CSG objects; "
+        std::size_t primitives = 0, meshes = 0, texts = 0, csgs = 0;
+        for (const auto& object : description.objects) {
+            if (std::holds_alternative<Mesh>(object.geometry)) ++meshes;
+            else if (std::holds_alternative<ExtrudedText>(object.geometry)) ++texts;
+            else if (std::holds_alternative<Csg>(object.geometry)) ++csgs;
+            else ++primitives;
+        }
+        std::cout << "Scene: " << primitives << " primitives, "
+                  << meshes << " meshes, " << texts << " text objects, "
+                  << csgs << " CSG objects; "
                   << (sampling.adaptive ? "up to " : "") << sampling.maximum
                   << " samples per pixel (" << (sampling.adaptive ? "adaptive" : "fixed") << ").\n";
         std::cout << "Preparing scene and GPU buffers...\n" << std::flush;

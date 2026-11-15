@@ -1,5 +1,5 @@
 #include "building/scene_description.h"
-#include "building/csg.h"
+#include "building/scene_values.h"
 #include "parsing/diagnostics.h"
 #include "parsing/parser.h"
 
@@ -28,13 +28,13 @@ SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
         errors.fail(parsed.camera.where, "camera direction must not be zero or parallel to the Y axis");
     }
     settings.room_size = values.dimensions(parsed.room.size, parsed.room.where);
-    settings.surfaces[0] = values.surface(parsed.room.floor, parsed.room.where);
-    settings.surfaces[1] = values.surface(parsed.room.ceiling, parsed.room.where);
-    settings.surfaces[2] = values.surface(parsed.room.back, parsed.room.where);
-    settings.surfaces[3] = values.surface(parsed.room.left, parsed.room.where);
-    settings.surfaces[4] = values.surface(parsed.room.right, parsed.room.where);
+    settings.textures[0] = values.texture(parsed.room.floor, parsed.room.where);
+    settings.textures[1] = values.texture(parsed.room.ceiling, parsed.room.where);
+    settings.textures[2] = values.texture(parsed.room.back, parsed.room.where);
+    settings.textures[3] = values.texture(parsed.room.left, parsed.room.where);
+    settings.textures[4] = values.texture(parsed.room.right, parsed.room.where);
 
-    std::map<std::string, SceneMaterial> materials;
+    std::map<std::string, hip_demo::Material> materials;
     for (const auto& material : parsed.materials) {
         if (!materials.emplace(material.name, values.material(material.value, material.where)).second) {
             errors.fail(material.where, "duplicate material '" + material.name + "'");
@@ -68,39 +68,31 @@ SceneDescription build_scene_description(const scene_ast::Scene& parsed) {
     for (const auto& object : parsed.objects) {
         std::visit([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<T, Sphere> || std::is_same_v<T, Torus>) {
-                auto primitive = values.primitive(value);
-                primitive.material = material_reference(value);
-                scene.primitives.push_back(primitive);
-            } else if constexpr (std::is_same_v<T, Csg>) {
-                hip_demo::append_csg(scene, value, material_reference(value), errors);
-            } else if constexpr (std::is_same_v<T, Text>) {
-                auto text = values.text(value);
-                text.material = material_reference(value);
-                scene.texts.push_back(std::move(text));
+            if constexpr (std::is_same_v<T, Sphere> || std::is_same_v<T, Torus> ||
+                          std::is_same_v<T, Csg> || std::is_same_v<T, Text>) {
+                scene.objects.push_back({values.geometry(value), material_reference(value)});
             } else {
-                SceneMesh mesh;
+                hip_demo::Mesh mesh;
+                hip_demo::Material material;
                 if constexpr (std::is_same_v<T, Mesh>) {
                     mesh.file = values.string(value.file, value.where);
                     mesh.up = value.up;
                     mesh.fit = values.dimensions(value.fit, value.where);
                     mesh.position = values.vector(value.position, value.where);
-                    mesh.material = material_reference(value);
+                    material = material_reference(value);
                 } else {
                     mesh.kind = value;
+                    material = value == SceneMeshKind::crystal
+                        ? hip_demo::Material{hip_demo::Phong{hip_demo::ConstantColor{{0.10f, 0.65f, 0.72f}}}}
+                        : hip_demo::Material{hip_demo::Diffuse{hip_demo::ConstantColor{{0.78f, 0.36f, 0.16f}}}};
                 }
-                scene.meshes.push_back(mesh);
+                scene.objects.push_back({std::move(mesh), std::move(material)});
             }
         }, object);
     }
     if (light.torus) {
-        ScenePrimitive emitter;
-        emitter.sphere = false;
-        emitter.center = light.center;
-        emitter.major_radius = light.major_radius;
-        emitter.minor_radius = light.minor_radius;
-        emitter.material = {{1, 1, 1}, Material::emissive, 0};
-        scene.primitives.push_back(emitter);
+        scene.objects.push_back({hip_demo::Torus{light.center, light.major_radius, light.minor_radius},
+                                 hip_demo::Emissive{hip_demo::ConstantColor{{1, 1, 1}}}});
     }
     return scene;
 }
@@ -112,17 +104,23 @@ SceneDescription load_scene_description(const std::string& path) {
     if (file.bad()) throw std::runtime_error("Failed while reading scene: " + path);
     auto scene = parse_scene_description(text, path);
     const auto directory = std::filesystem::absolute(std::filesystem::path(path)).parent_path();
-    for (auto& mesh : scene.meshes) {
-        if (mesh.kind == SceneMeshKind::ply) {
-            mesh.file = (directory / std::filesystem::path(mesh.file)).lexically_normal().string();
-        }
-    }
-    const auto resolve_fonts = [&](auto& texts) {
-        for (auto& text : texts)
-            text.font = (directory / std::filesystem::path(text.font)).lexically_normal().string();
+    const auto resolve_text = [&](hip_demo::ExtrudedText& text) {
+        text.font = (directory / std::filesystem::path(text.font)).lexically_normal().string();
     };
-    resolve_fonts(scene.texts);
-    resolve_fonts(scene.csg_texts);
+    const auto resolve_csg = [&](auto&& self, hip_demo::CsgNode& node) -> void {
+        if (auto* text = std::get_if<hip_demo::ExtrudedText>(&node.geometry)) resolve_text(*text);
+        for (auto& child : node.children) self(self, child);
+    };
+    for (auto& object : scene.objects) {
+        std::visit([&](auto& geometry) {
+            using T = std::decay_t<decltype(geometry)>;
+            if constexpr (std::is_same_v<T, hip_demo::Mesh>) {
+                if (geometry.kind == SceneMeshKind::ply)
+                    geometry.file = (directory / std::filesystem::path(geometry.file)).lexically_normal().string();
+            } else if constexpr (std::is_same_v<T, hip_demo::ExtrudedText>) resolve_text(geometry);
+            else if constexpr (std::is_same_v<T, hip_demo::Csg>) resolve_csg(resolve_csg, geometry.root);
+        }, object.geometry);
+    }
     return scene;
 }
 
@@ -132,20 +130,22 @@ std::string builtin_scene_path(bool detail) {
 }
 
 void override_scene_mesh(SceneDescription& scene, const std::string& path, MeshUp up) {
-    SceneMesh* selected = nullptr;
-    for (auto& mesh : scene.meshes) {
-        if (mesh.kind == SceneMeshKind::cat || mesh.kind == SceneMeshKind::ply) {
+    hip_demo::Object* selected = nullptr;
+    for (auto& object : scene.objects) {
+        const auto* mesh = std::get_if<hip_demo::Mesh>(&object.geometry);
+        if (mesh && (mesh->kind == SceneMeshKind::cat || mesh->kind == SceneMeshKind::ply)) {
             if (selected) throw std::runtime_error("--mesh requires a scene with exactly one cat or PLY mesh.");
-            selected = &mesh;
+            selected = &object;
         }
     }
     if (!selected) throw std::runtime_error("--mesh requires a scene containing a cat or PLY mesh.");
-    if (selected->kind == SceneMeshKind::cat) {
-        selected->fit = {1.05f, 1.55f, 0.9f};
-        selected->position = {1.85f, 0.02f, 1.75f};
-        selected->material = {{0.78f, 0.36f, 0.16f}, Material::diffuse, 1};
+    auto& mesh = std::get<hip_demo::Mesh>(selected->geometry);
+    if (mesh.kind == SceneMeshKind::cat) {
+        mesh.fit = {1.05f, 1.55f, 0.9f};
+        mesh.position = {1.85f, 0.02f, 1.75f};
+        selected->material = hip_demo::Diffuse{hip_demo::ConstantColor{{0.78f, 0.36f, 0.16f}}};
     }
-    selected->kind = SceneMeshKind::ply;
-    selected->file = path;
-    selected->up = up;
+    mesh.kind = SceneMeshKind::ply;
+    mesh.file = path;
+    mesh.up = up;
 }

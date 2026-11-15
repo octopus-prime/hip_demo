@@ -40,8 +40,8 @@ public:
         check_hiprt(hiprtCreateContext(HIPRT_API_VERSION, context_input, context_.value),
                     "Creating the HIP RT context");
 
-        settings_ = allocate_device<SceneSettings>(1, "Allocating scene settings");
-        check_hip(hipMemcpy(settings_.get(), &prepared.settings, sizeof(SceneSettings), hipMemcpyHostToDevice),
+        settings_ = allocate_device<GpuSceneSettings>(1, "Allocating scene settings");
+        check_hip(hipMemcpy(settings_.get(), &prepared.settings, sizeof(GpuSceneSettings), hipMemcpyHostToDevice),
                   "Uploading scene settings");
 
         const auto object_count = static_cast<unsigned int>(prepared.primitives.size());
@@ -51,18 +51,18 @@ public:
         const auto& bounds = prepared.bounds;
         const auto custom_count = object_count + csg_count_ + prepared.glyph_count;
         if (csg_count_ != 0) {
-            csgs_ = allocate_device<SceneCsg>(prepared.csgs.size(), "Allocating CSG objects");
-            csg_leaves_ = allocate_device<SceneCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG leaves");
-            check_hip(hipMemcpy(csgs_.get(), prepared.csgs.data(), prepared.csgs.size() * sizeof(SceneCsg),
+            csgs_ = allocate_device<GpuCsg>(prepared.csgs.size(), "Allocating CSG objects");
+            csg_leaves_ = allocate_device<GpuCsgLeaf>(prepared.csg_leaves.size(), "Allocating CSG leaves");
+            check_hip(hipMemcpy(csgs_.get(), prepared.csgs.data(), prepared.csgs.size() * sizeof(GpuCsg),
                                hipMemcpyHostToDevice), "Uploading CSG objects");
             check_hip(hipMemcpy(csg_leaves_.get(), prepared.csg_leaves.data(),
-                               prepared.csg_leaves.size() * sizeof(SceneCsgLeaf), hipMemcpyHostToDevice),
+                               prepared.csg_leaves.size() * sizeof(GpuCsgLeaf), hipMemcpyHostToDevice),
                       "Uploading CSG leaves");
         }
         if (object_count != 0) {
-            primitives_ = allocate_device<ScenePrimitive>(object_count, "Allocating scene primitives");
+            primitives_ = allocate_device<GpuPrimitive>(object_count, "Allocating scene primitives");
             check_hip(hipMemcpy(primitives_.get(), prepared.primitives.data(),
-                                object_count * sizeof(ScenePrimitive), hipMemcpyHostToDevice),
+                                object_count * sizeof(GpuPrimitive), hipMemcpyHostToDevice),
                       "Uploading scene primitives");
         }
         if (!text.glyphs.empty()) {
@@ -167,10 +167,10 @@ public:
 
 private:
     HiprtContextOwner context_;
-    std::unique_ptr<SceneSettings, HipBufferDeleter> settings_;
-    std::unique_ptr<ScenePrimitive, HipBufferDeleter> primitives_;
-    std::unique_ptr<SceneCsg, HipBufferDeleter> csgs_;
-    std::unique_ptr<SceneCsgLeaf, HipBufferDeleter> csg_leaves_;
+    std::unique_ptr<GpuSceneSettings, HipBufferDeleter> settings_;
+    std::unique_ptr<GpuPrimitive, HipBufferDeleter> primitives_;
+    std::unique_ptr<GpuCsg, HipBufferDeleter> csgs_;
+    std::unique_ptr<GpuCsgLeaf, HipBufferDeleter> csg_leaves_;
     std::unique_ptr<TextGlyph, HipBufferDeleter> text_glyphs_;
     std::unique_ptr<TextCurve, HipBufferDeleter> text_curves_;
     std::unique_ptr<float3, HipBufferDeleter> bounds_;

@@ -258,7 +258,7 @@ add_custom_target(
 )
 add_library(rply STATIC third_party/rply/rply.c)
 target_include_directories(rply PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply")
-add_library(ply_mesh STATIC src/surface/mesh.cpp)
+add_library(ply_mesh STATIC src/geometry/mesh.cpp)
 target_include_directories(ply_mesh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(ply_mesh PRIVATE rply)
 add_library(scene_description STATIC src/parsing/parser.cpp src/building/scene_description.cpp)
@@ -267,7 +267,7 @@ target_link_libraries(scene_description PRIVATE Boost::headers)
 target_compile_definitions(scene_description PRIVATE
     NOMINMAX
     HIP_DEMO_SCENE_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
-add_library(text_geometry STATIC src/surface/text.cpp)
+add_library(text_geometry STATIC src/geometry/text.cpp)
 target_include_directories(text_geometry PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(text_geometry PRIVATE freetype)
 add_library(app_support STATIC src/app/options.cpp src/saving/image.cpp src/saving/bmp.cpp src/saving/png.cpp)

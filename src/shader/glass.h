@@ -1,6 +1,6 @@
 #pragma once
 
-#include "surface/hit.h"
+#include "geometry/hit.h"
 #include "math/random.h"
 
 namespace hip_demo {

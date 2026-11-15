@@ -1,6 +1,6 @@
 #pragma once
 
-#include "surface/text.h"
+#include "geometry/text.h"
 
 #if defined(__HIPCC__)
 #define TEXT_SOLID_HD __host__ __device__

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "surface/hit.h"
+#include "geometry/hit.h"
 #include "scene/defaults.h"
 #include "math/polynomial.h"
 
@@ -29,10 +29,15 @@ struct TorusRoots {
     }
 };
 
-__device__ inline TorusRoots torus_roots(const Ray& ray, float3 center, float major_radius,
-                                        float minor_radius, float minimum, float maximum) {
+__device__ inline Ray Torus::local_ray(const Ray& ray) const {
+    return {rotate_x(ray.origin - vector3(center), -tilt_sine, tilt_cosine),
+            rotate_x(ray.direction, -tilt_sine, tilt_cosine)};
+}
+
+__device__ inline TorusRoots Torus::intersections(const Ray& world_ray, float minimum, float maximum) const {
+    const auto ray = local_ray(world_ray);
     const float bound = major_radius + minor_radius;
-    const float3 offset = ray.origin - center;
+    const float3 offset = ray.origin;
     const float speed_squared = dot(ray.direction, ray.direction);
     if (speed_squared == 0.0f) return {};
     const float speed = sqrtf(speed_squared);
@@ -60,15 +65,14 @@ __device__ inline TorusRoots torus_roots(const Ray& ray, float3 center, float ma
     return {roots, o, d, middle, time_scale, R, r};
 }
 
-__device__ inline bool hit_torus(const Ray& ray, float3 center, float maximum_distance, Hit& hit,
-                          float major_radius = torus_major_radius, float minor_radius = torus_minor_radius) {
-    const auto intersections = torus_roots(ray, center, major_radius, minor_radius, 0.001f, maximum_distance);
-    for (int i = 0; i < intersections.roots.count; ++i) {
-        const float distance = intersections.distance(i);
-        if (distance < 0.001f || distance >= maximum_distance) continue;
+__device__ inline bool Torus::intersect(const Ray& ray, float minimum, float maximum, Hit& hit) const {
+    const auto roots = intersections(ray, minimum, maximum);
+    for (int i = 0; i < roots.roots.count; ++i) {
+        const float distance = roots.distance(i);
+        if (distance < minimum || distance >= maximum) continue;
         hit.distance = distance;
         hit.point = ray.origin + distance * ray.direction;
-        set_face_normal(hit, ray, intersections.normal(i));
+        set_face_normal(hit, ray, rotate_x(roots.normal(i), tilt_sine, tilt_cosine));
         return true;
     }
     return false;

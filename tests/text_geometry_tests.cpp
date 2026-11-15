@@ -1,5 +1,5 @@
-#include "surface/text.h"
-#include "surface/text_solid.h"
+#include "geometry/text.h"
+#include "geometry/text_solid.h"
 #include "polynomial_cases.h"
 
 #include <algorithm>
@@ -140,12 +140,12 @@ void check_fill_crossings() {
 }
 
 void check_font(const char* path) {
-    SceneText text{path, "BO S", 2, 0.3f, {1, 2, 3}, {{0.8f, 0.2f, 0.1f}, Material::metal, 0}};
+    hip_demo::ExtrudedText text{path, "BO S", 2, 0.3f, {1, 2, 3}};
     TextGeometry geometry;
-    append_text_geometry(geometry, text, 7);
+    append_text_geometry(geometry, text, 7, {{0.8f, 0.2f, 0.1f}, ShaderKind::metal, 0});
     require(geometry.glyphs.size() == 3 && geometry.curves.size() > 10, "font outlines and spaces");
     require(geometry.glyphs[0].object_id == 7 && geometry.glyphs[0].maximum.z == 3.3f &&
-            geometry.glyphs[0].material.kind == Material::metal, "glyph attributes");
+            geometry.glyphs[0].material.kind == ShaderKind::metal, "glyph attributes");
     require(geometry.glyphs[2].position.x > geometry.glyphs[1].position.x, "glyph advances");
     require(std::any_of(geometry.curves.begin(), geometry.curves.end(), [](const TextCurve& c) {
         return c.x[2] != 0 || c.y[2] != 0 || c.x[3] != 0 || c.y[3] != 0;

@@ -1,12 +1,12 @@
 #pragma once
 
-#include "surface/hit.h"
+#include "geometry/hit.h"
 #include "scene/defaults.h"
 
 namespace hip_demo {
 
 __device__ inline bool intersect_room(const Ray& ray, float maximum_distance, Hit& hit, int& wall_index,
-                         const SceneSettings* settings = nullptr) {
+                         const GpuSceneSettings* settings = nullptr) {
     const float half_width = settings ? settings->room_size.x / 2 : room_half_width;
     const float height = settings ? settings->room_size.y : room_height;
     const float half_depth = settings ? settings->room_size.z / 2 : room_half_depth;
