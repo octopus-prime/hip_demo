@@ -1,0 +1,5 @@
+hipscene 1
+camera { position [1.5, 2.7, 0] target [4, 2.7, 0] half_view_height 0.57 }
+room { size [8, 6, 8] floor color [0.65, 0.65, 0.65] ceiling color [0.65, 0.65, 0.65] back color [0.38, 0.42, 0.5] left color [0.58, 0.58, 0.58] right julia_detail }
+material lamp = emissive [12, 11, 10]
+rectangle { center [0, 5.7, 0] width 3 depth 2 material lamp }

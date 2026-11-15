@@ -150,6 +150,9 @@ not a guarantee of matching fixed-sample quality.
 
 ## Supplied scenes and assets
 
+For rendered examples and syntax for every geometry, material and texture, see
+the [visual reference](docs/visual-reference.md).
+
 | Scene | Selection | External assets |
 | --- | --- | --- |
 | [Classic](scenes/classic.hipscene) | `--scene classic` | None. |

@@ -1,0 +1,7 @@
+hipscene 1
+camera { position [2.4, 2.8, 6] target [0, 1.6, 0] half_view_height 0.34 }
+room { size [8, 6, 8] floor color [0.65, 0.65, 0.65] ceiling color [0.65, 0.65, 0.65] back color [0.38, 0.42, 0.5] left color [0.58, 0.58, 0.58] right color [0.58, 0.58, 0.58] }
+material demo = emissive [8, 3, 1]
+material receiver = diffuse [0.65, 0.65, 0.65]
+torus { center [0, 2.8, 0] major_radius 0.7 minor_radius 0.2 tilt_x 70 material demo }
+sphere { center [0, 0.7, 0] radius 0.7 material receiver }

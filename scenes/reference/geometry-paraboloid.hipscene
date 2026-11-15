@@ -1,0 +1,7 @@
+hipscene 1
+camera { position [2.4, 2.4, 6] target [0, 1, 0] half_view_height 0.24 }
+room { size [8, 6, 8] floor color [0.65, 0.65, 0.65] ceiling color [0.65, 0.65, 0.65] back color [0.38, 0.42, 0.5] left color [0.58, 0.58, 0.58] right color [0.58, 0.58, 0.58] }
+material lamp = emissive [12, 11, 10]
+material demo = phong [0.15, 0.42, 0.85]
+rectangle { center [0, 5.7, 0] width 3 depth 2 material lamp }
+paraboloid { center [0, 1, 0] radius 1 height 2 material demo }
