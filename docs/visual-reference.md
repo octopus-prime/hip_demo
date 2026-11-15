@@ -5,7 +5,22 @@ the complete scene that produced it; snippets show the relevant scene syntax.
 Geometry examples use the same blue Phong material unless otherwise noted.
 Material examples use the same sphere and lighting where practical.
 
-Jump to [geometry](#geometry), [materials](#materials) or [textures](#textures).
+## Contents
+
+- [Geometry](#geometry)
+  - [Sphere](#sphere), [Ellipsoid](#ellipsoid), [Cylinder](#cylinder), [Cone](#cone)
+  - [Paraboloid](#paraboloid), [Hyperboloid](#hyperboloid), [Torus](#torus), [Rectangle](#rectangle)
+  - [PLY triangle mesh](#ply-triangle-mesh): [Dragon showcase](#dragon-showcase)
+  - [Procedural cat](#procedural-cat), [Procedural crystal](#procedural-crystal), [Extruded text](#extruded-text)
+  - [CSG union](#csg-union), [CSG intersection](#csg-intersection), [CSG difference](#csg-difference)
+- [Materials](#materials)
+  - [Diffuse](#diffuse), [Phong](#phong), [Metal](#metal), [Glass](#glass), [Emissive](#emissive)
+- [Textures](#textures)
+  - [Constant color](#constant-color), [Tiles](#tiles), [Wood](#wood), [Marble](#marble)
+  - [Mandelbrot](#mandelbrot), [Julia](#julia)
+
+## Reproducing the images
+
 Images use **640 x 400 pixels and 256 fixed samples per pixel**, without
 denoising. From the repository root, render one or regenerate all images:
 
@@ -13,6 +28,10 @@ denoising. From the repository root, render one or regenerate all images:
 .\build\bin\hiprt_demo.exe --scene .\scenes\reference\geometry-sphere.hipscene -o .\docs\images\reference\geometry-sphere.png --width 640 --height 400 --sampling fixed --samples 256
 
 Get-ChildItem .\scenes\reference\*.hipscene | ForEach-Object {
+    if ($_.BaseName -eq 'geometry-dragon' -and -not (Test-Path .\ply\Dragon-ply\Dragon-ply.ply)) {
+        Write-Warning 'Skipping optional dragon showcase: external PLY is missing.'
+        return
+    }
     .\build\bin\hiprt_demo.exe --scene $_.FullName -o (Join-Path .\docs\images\reference ($_.BaseName + '.png')) --width 640 --height 400 --sampling fixed --samples 256
     if ($LASTEXITCODE -ne 0) { throw "Rendering failed: $($_.Name)" }
 }
@@ -20,7 +39,8 @@ Get-ChildItem .\scenes\reference\*.hipscene | ForEach-Object {
 
 The text example uses `C:\Windows\Fonts\arial.ttf`, as do the existing text
 demos. On other systems, edit the scene to use a locally licensed TrueType or
-OpenType font. The mesh example uses the included original pyramid PLY.
+OpenType font. The minimal mesh example uses the included original pyramid PLY;
+the optional [dragon showcase](#dragon-showcase) requires an external model.
 Re-rendered images can vary slightly with GPU and compiler.
 
 ## Geometry
@@ -143,6 +163,29 @@ mesh { file "pyramid.ply" up y fit [2, 2, 2] position [0, 0.02, 0] material demo
 [PLY](../scenes/reference/pyramid.ply)
 
 ![Rendered triangle mesh](images/reference/geometry-mesh.png)
+
+#### Dragon showcase
+
+The same mesh pipeline also handles detailed scanned models: this dragon has
+**5,000,000 triangles**. It uses the same blue Phong material and lighting as
+the pyramid, showing the detail possible beyond a minimal mesh.
+
+```text
+mesh { file "../../ply/Dragon-ply/Dragon-ply.ply" up z fit [1.85, 2.45, 1.55] position [0, 0.02, 0] material demo }
+```
+
+[Scene](../scenes/reference/geometry-dragon.hipscene)
+
+![Rendered dragon triangle mesh](images/reference/geometry-dragon.png)
+
+**Asset and attribution:** Dragon 3D model by
+[Artec Group inc.](https://www.artec3d.com/), licensed under
+[Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/).
+This image is an adaptation rendered with uniform scaling, a blue material and
+scene lighting. The external PLY is **not bundled**; place the same Dragon PLY
+used by the Detail scene at `ply/Dragon-ply/Dragon-ply.ply`, or edit the path.
+Keep its accompanying attribution and license when obtaining or redistributing
+the model; the checked-in preview does not require downloading it.
 
 ### Procedural cat
 
