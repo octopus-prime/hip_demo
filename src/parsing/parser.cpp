@@ -36,7 +36,8 @@ BOOST_PARSER_DEFINE_RULES(
     position_p, identifier_p, string_p, scalar_p, vector2_p, vector_p,
     camera_p, surface_p, wood_p, marble_p, tiles_p, mandelbrot_p, julia_p,
     floor_p, ceiling_p, back_p, left_p, right_p, room_p,
-    diffuse_p, phong_p, metal_p, glass_p, shader_p, material_p, rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p,
+    diffuse_p, phong_p, metal_p, glass_p, emissive_p, shader_p, material_p,
+    rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p, rectangle_p,
     csg_sphere_p, csg_torus_p, csg_text_p, csg_branch_p, csg_node_p, csg_p,
     mesh_up_p, mesh_p, text_p, builtin_p, object_p, scene_p);
 
@@ -84,14 +85,14 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
     for (auto& material : parsed.materials) {
         scene.materials.push_back({offset(material.where), std::move(material.name), material.value});
     }
-    scene.light = std::visit([&](const auto& light) -> scene_ast::Light {
+    if (parsed.light) scene.light = std::visit([&](const auto& light) -> scene_ast::Light {
         if constexpr (std::is_same_v<std::decay_t<decltype(light)>, RectangleLight>) {
             return scene_ast::RectangleLight{offset(light.where), light.center, light.size, light.radiance};
         } else {
             return scene_ast::TorusLight{offset(light.where), light.center, light.major_radius,
                                          light.minor_radius, light.radiance};
         }
-    }, parsed.light);
+    }, *parsed.light);
     for (auto& object : parsed.objects) {
         scene.objects.push_back(std::visit([&](auto& value) -> scene_ast::Object {
             using T = std::decay_t<decltype(value)>;
@@ -104,6 +105,9 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
             } else if constexpr (std::is_same_v<T, Mesh>) {
                 return scene_ast::Mesh{offset(value.where), std::move(value.file), value.up,
                                         value.fit, value.position, std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, hip_demo::parsing::Rectangle>) {
+                return scene_ast::Rectangle{offset(value.where), value.center, value.width, value.depth,
+                                             std::move(value.material)};
             } else if constexpr (std::is_same_v<T, Text>) {
                 return scene_ast::Text{offset(value.where), std::move(value.font), std::move(value.value),
                                         value.size, value.depth, value.position, std::move(value.material)};

@@ -8,7 +8,10 @@ namespace hip_demo {
 struct LightSample {
     float3 point;
     float3 normal;
-    float area_weight;
+    float area_pdf;
+    float3 radiance;
+    unsigned int object_id;
+    unsigned int triangle;
 };
 
 }

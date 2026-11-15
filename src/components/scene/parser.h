@@ -33,7 +33,7 @@ struct Parsed {
     Camera camera;
     Room room;
     std::vector<NamedMaterial> materials;
-    Light light;
+    std::optional<Light> light;
     std::vector<Object> objects;
 };
 }
@@ -45,7 +45,7 @@ using hip_demo::parsing::ParsedScene;
 inline bp::rule<hip_demo::parsing::scene_p_, ParsedScene> scene_p = "hipscene 1 scene";
 
 inline auto scene_p_def = keyword("hipscene") > keyword("1")
-    > camera_p > room_p > *material_p > light_p > *object_p > bp::eoi;
+    > camera_p > room_p > *material_p > -light_p > *object_p > bp::eoi;
 }
 namespace hip_demo::parsing {
 using scene::parsing::scene_p;

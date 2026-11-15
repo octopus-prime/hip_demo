@@ -6,6 +6,7 @@
 #include "components/material/builder.h"
 #include "components/scene/settings.h"
 #include "components/geometry/csg/preparation.h"
+#include "components/light/preparation.h"
 #include <utility>
 
 namespace hip_demo {
@@ -15,7 +16,7 @@ inline PreparedScene prepare_scene(const SceneDescription& description) {
     constexpr float margin = 0.01f;
     PreparedScene compiled;
     compiled.settings = prepare_settings(description.settings);
-    std::vector<const Object*> texts, meshes;
+    std::vector<const Object*> texts, meshes, rectangles;
     std::vector<ExtrudedText> csg_texts;
     for (const auto& object : description.objects) {
         std::visit([&](const auto& geometry) {
@@ -25,6 +26,7 @@ inline PreparedScene prepare_scene(const SceneDescription& description) {
             else if constexpr (std::is_same_v<T, Csg>)
                 append_csg(compiled, geometry, prepare_material(object.material), csg_texts);
             else if constexpr (std::is_same_v<T, ExtrudedText>) texts.push_back(&object);
+            else if constexpr (std::is_same_v<T, Rectangle>) rectangles.push_back(&object);
             else {
                 static_assert(std::is_same_v<T, Mesh>);
                 meshes.push_back(&object);
@@ -119,16 +121,41 @@ inline PreparedScene prepare_scene(const SceneDescription& description) {
             append_ellipsoid(vertices, cat_point(-0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
             append_ellipsoid(vertices, cat_point(0.13f, 1.25f, 0.25f), {0.045f, 0.055f, 0.025f});
             append_ellipsoid(vertices, cat_point(0.0f, 1.14f, 0.255f), {0.035f, 0.025f, 0.025f});
-            material = {{0.025f, 0.018f, 0.012f}, ShaderKind::diffuse, 1};
+            if (material.kind != ShaderKind::emissive)
+                material = {{0.025f, 0.018f, 0.012f}, ShaderKind::diffuse, 1};
         } else {
             append_ply_mesh(vertices, mesh.file, mesh.up, mesh.fit, mesh.position);
             cat_detail_start = static_cast<unsigned int>(vertices.size() / 3);
         }
         triangle_materials.resize(vertices.size() / 3, {material, mesh_id++});
     }
-    return {compiled.settings, std::move(compiled.primitives), std::move(text), std::move(bounds),
-            std::move(vertices), std::move(triangle_materials), cat_detail_start,
-            std::move(compiled.csgs), std::move(csg_leaves), glyph_count};
+    const auto first_rectangle_id = mesh_id;
+    for (const auto* object : rectangles) {
+        const auto& rectangle = std::get<Rectangle>(object->geometry);
+        if (!std::isfinite(rectangle.width) || !std::isfinite(rectangle.depth) ||
+            rectangle.width <= 0 || rectangle.depth <= 0)
+            throw std::runtime_error("Rectangle dimensions must be finite and positive");
+        const float3 a{rectangle.center.x - rectangle.width / 2, rectangle.center.y,
+                       rectangle.center.z - rectangle.depth / 2};
+        const float3 b{rectangle.center.x + rectangle.width / 2, rectangle.center.y, a.z};
+        const float3 c{a.x, rectangle.center.y, rectangle.center.z + rectangle.depth / 2};
+        const float3 d{b.x, rectangle.center.y, c.z};
+        if (!std::isfinite(a.x) || !std::isfinite(a.y) || !std::isfinite(a.z) ||
+            !std::isfinite(b.x) || !std::isfinite(c.z) || b.x <= a.x || c.z <= a.z)
+            throw std::runtime_error("Rectangle coordinates exceed the usable float range");
+        append_triangle(vertices, a, b, c);
+        append_triangle(vertices, b, d, c);
+        triangle_materials.resize(vertices.size() / 3, {prepare_material(object->material), mesh_id++});
+    }
+    compiled.text = std::move(text);
+    compiled.bounds = std::move(bounds);
+    compiled.vertices = std::move(vertices);
+    compiled.triangle_materials = std::move(triangle_materials);
+    compiled.cat_detail_start = cat_detail_start;
+    compiled.csg_leaves = std::move(csg_leaves);
+    compiled.glyph_count = glyph_count;
+    prepare_emitters(compiled, first_rectangle_id);
+    return compiled;
 }
 
 }

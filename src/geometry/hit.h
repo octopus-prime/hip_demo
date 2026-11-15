@@ -17,11 +17,13 @@ struct Hit {
     float3 normal;
     float3 geometric_normal;
     float3 albedo;
+    float3 emission;
     ShaderKind material;
     float roughness;
     TextureKind texture;
     bool front_face;
     bool has_normal_map;
+    bool sampled_emitter;
     unsigned int object_id;
 };
 
@@ -30,6 +32,8 @@ __device__ inline void set_material(Hit& hit, const GpuMaterial& material) {
     hit.material = material.kind;
     hit.roughness = material.roughness;
     hit.texture = material.texture;
+    hit.emission = material.kind == ShaderKind::emissive ? hit.albedo : float3{};
+    hit.sampled_emitter = material.sampled_emitter;
 }
 
 __device__ inline void set_face_normal(Hit& hit, const Ray& ray, float3 outward_normal) {

@@ -2,6 +2,7 @@
 
 #include "components/geometry/csg/parser.h"
 #include "components/geometry/mesh/parser.h"
+#include "components/geometry/rectangle/parser.h"
 #include "components/object/description.h"
 
 namespace hip_demo::parsing {
@@ -20,7 +21,7 @@ using hip_demo::parsing::CsgNode;
 using hip_demo::parsing::CsgBranch;
 using hip_demo::parsing::Csg;
 using hip_demo::parsing::Mesh;
-using Parsed = std::variant<Sphere, Torus, Mesh, Text, Csg, SceneMeshKind>;
+using Parsed = std::variant<Sphere, Torus, Mesh, Text, Csg, SceneMeshKind, hip_demo::parsing::Rectangle>;
 }
 namespace hip_demo::parsing {
 using Object = object::parsing::Parsed;
@@ -32,7 +33,7 @@ inline bp::rule<hip_demo::parsing::object_p_, Object> object_p = "object";
 
 inline auto builtin_p_def = (keyword("cat") >> bp::attr(SceneMeshKind::cat)) |
                      (keyword("crystal") >> bp::attr(SceneMeshKind::crystal));
-inline auto object_p_def = sphere_p | torus_p | mesh_p | text_p | csg_p | builtin_p;
+inline auto object_p_def = sphere_p | torus_p | mesh_p | text_p | csg_p | rectangle_p | builtin_p;
 }
 namespace hip_demo::parsing {
 using object::parsing::builtin_p;

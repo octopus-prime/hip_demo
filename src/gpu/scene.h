@@ -22,8 +22,7 @@ public:
     HiprtScene(int device, const SceneDescription& description)
         : HiprtScene(device, prepare_scene(description)) {}
 
-    HiprtScene(int device, PreparedScene prepared)
-        : detail_(prepared.settings.light.torus) {
+    HiprtScene(int device, PreparedScene prepared) {
         hipCtx_t hip_context = nullptr;
         // HIP RT 3.0 requires this handle; HIP 7.1 has no non-deprecated context getter.
 #pragma clang diagnostic push
@@ -117,6 +116,20 @@ public:
                         "Initializing HIP RT function table");
         }
 
+        emitter_count_ = static_cast<unsigned int>(prepared.emitters.size());
+        if (emitter_count_ != 0) {
+            emitters_ = allocate_device<GpuEmitter>(prepared.emitters.size(), "Allocating emitters");
+            check_hip(hipMemcpy(emitters_.get(), prepared.emitters.data(),
+                               prepared.emitters.size() * sizeof(GpuEmitter), hipMemcpyHostToDevice),
+                      "Uploading emitters");
+        }
+        if (!prepared.emitter_triangles.empty()) {
+            emitter_triangles_ = allocate_device<EmitterTriangle>(prepared.emitter_triangles.size(),
+                                                                  "Allocating emitter triangle distributions");
+            check_hip(hipMemcpy(emitter_triangles_.get(), prepared.emitter_triangles.data(),
+                               prepared.emitter_triangles.size() * sizeof(EmitterTriangle), hipMemcpyHostToDevice),
+                      "Uploading emitter triangle distributions");
+        }
         const auto& vertices = prepared.vertices;
         const auto& triangle_materials = prepared.triangle_materials;
         cat_detail_start_ = prepared.cat_detail_start;
@@ -160,9 +173,9 @@ public:
 
     TraceScene scene() const {
         return {geometry_.value, functions_.value, mesh_.value, mesh_vertices_.get(),
-                mesh_triangle_count_, cat_detail_start_, detail_, settings_.get(),
+                mesh_triangle_count_, cat_detail_start_, settings_.get(),
                 primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_,
-                csgs_.get(), csg_count_};
+                csgs_.get(), csg_count_, emitters_.get(), emitter_count_, emitter_triangles_.get()};
     }
 
 private:
@@ -179,12 +192,14 @@ private:
     HiprtFunctionTableOwner functions_;
     std::unique_ptr<float4, HipBufferDeleter> mesh_vertices_;
     std::unique_ptr<TriangleMaterial, HipBufferDeleter> triangle_materials_;
+    std::unique_ptr<GpuEmitter, HipBufferDeleter> emitters_;
+    std::unique_ptr<EmitterTriangle, HipBufferDeleter> emitter_triangles_;
     HiprtGeometryOwner mesh_;
     unsigned int mesh_triangle_count_ = 0;
     unsigned int primitive_count_ = 0;
     unsigned int csg_count_ = 0;
     unsigned int cat_detail_start_ = 0;
-    bool detail_ = false;
+    unsigned int emitter_count_ = 0;
 };
 
 }

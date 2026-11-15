@@ -157,6 +157,8 @@ not a guarantee of matching fixed-sample quality.
 | [Text](scenes/text.hipscene) | `--scene .\scenes\text.hipscene` | A font. |
 | [CSG](scenes/csg.hipscene) | `--scene .\scenes\csg.hipscene` | None. |
 | [CSG text](scenes/csg_text.hipscene) | `--scene .\scenes\csg_text.hipscene` | A font. |
+| [Mesh light](scenes/mesh_light.hipscene) | `--scene .\scenes\mesh_light.hipscene` | None; original panel mesh included. |
+| [Dragon light](scenes/dragon_light.hipscene) | `--scene .\scenes\dragon_light.hipscene` | Same dragon PLY mesh as Detail. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
 crystal and a low-poly cat. Detail contains a luminous torus, mirror and glass
@@ -200,7 +202,7 @@ hipscene 1
 camera { ... }
 room { ... }
 material definitions
-one light
+optional legacy light block
 objects
 ```
 
@@ -214,9 +216,54 @@ semantic constraints are checked when building the renderer's scene model;
 errors identify the source file, line and column of the relevant scene block.
 
 Scenes control camera position/target/view size, room dimensions and surfaces,
-named diffuse/metal/glass/Phong materials, one rectangle or torus light, and any
-number of spheres, tori, CSG solids, PLY meshes and text objects. `cat` and `crystal` insert
+named diffuse/metal/glass/Phong/emissive materials, and any
+number of spheres, tori, rectangles, CSG solids, PLY meshes and text objects. `cat` and `crystal` insert
 the supplied procedural models.
+
+### Emissive objects and mesh lights
+
+Lights are ordinary objects with an emissive material. RGB values specify
+finite, nonnegative **radiance**, not reflectance; values above 1 are allowed:
+
+```text
+material lamp = emissive [16, 10, 5]
+mesh {
+    file "light_panel.ply"
+    up y
+    fit [3, 1, 2]
+    position [0, 4, 0]
+    material lamp
+}
+rectangle { center [0, 5, 0] width 2 depth 1 material lamp }
+```
+
+Rectangles lie in XZ and face downward. Meshes need not be closed: their triangle
+winding determines the emitting side. All emission is **one-sided**, including
+camera and reflected hits. Each object emits its own material's radiance.
+Multiple emitters and scenes without a legacy light block are supported.
+Existing `light ceiling_rectangle` and `light torus` blocks remain compatible;
+the builder translates them into rectangle/torus objects with emissive materials.
+The room ceiling itself no longer contains a special light region.
+
+Direct lighting samples rectangles, tori and meshes through references to the
+prepared geometry, without a second light-shape model. Mesh triangles are selected
+proportionally to their **final world-space area**, then sampled uniformly within
+the triangle. Degenerate triangles are skipped; wholly degenerate emissive meshes
+are rejected. PDFs include emitter selection; tilted tori use their geometry's
+transform and nonuniform angular-sampling PDF.
+
+Sphere, text and CSG emission remains visible through camera/BSDF rays, but these
+geometries do not yet have direct-light samplers and can converge more slowly.
+To avoid double counting, nondelta BSDF hits count only unsampled emitters;
+camera and delta-bounce hits count all emitters. This partitions the estimators
+without MIS; adding MIS will also require BSDF PDFs.
+
+Try the self-contained [mesh-light scene](scenes/mesh_light.hipscene), which combines
+a tilted, unequal-triangle panel with an emissive torus.
+The [dragon-light scene](scenes/dragon_light.hipscene) uses the Detail dragon as
+the only emitter, with warm-orange radiance and mirror/glass spheres alongside.
+Constant emission makes the dragon itself appear uniformly luminous rather
+than diffusely shaded; its silhouette, occlusion and reflections reveal the shape.
 
 For text, `value` is single-line UTF-8, `size` is the em size in scene units,
 `depth` is extrusion depth, and `position` is the baseline origin at the back cap.
@@ -248,7 +295,8 @@ Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
 
 Set the material once on the `csg` object, not on its leaves. It also covers
 new cut surfaces, whose normals point out of the remaining solid.
-Meshes, room surfaces and lights cannot be CSG operands.
+Meshes, rectangles and room surfaces cannot be CSG operands. A CSG object can
+itself use an emissive material.
 
 Text operands use the same font, value, size, depth and position fields as
 standalone text, but **omit the leaf material**:
@@ -377,11 +425,11 @@ environment; run `./build/bin/hiprt_demo` instead of the Windows executable.
 The CPU scene uses standard graphics terminology:
 
 - **Object** combines a **Geometry** and a **Material**.
-- **Geometry** is a `std::variant` of sphere, torus, mesh, extruded text and CSG.
+- **Geometry** is a `std::variant` of sphere, torus, rectangle, mesh, extruded text and CSG.
   Geometry contains no material parameters.
 - **Material** is a `std::variant` of diffuse, Phong, metal, glass and emissive
   descriptions. Each alternative supplies parameters for its shader/BSDF code.
-- **Texture** supplies albedo values independently of the shader. Constant
+- **Texture** supplies albedo or emitted radiance independently of the shader. Constant
   colors and the existing procedural patterns are texture alternatives; metal
   roughness remains a scalar.
 
@@ -401,10 +449,12 @@ not a virtual class hierarchy. Each type lives in its own
 [Object](src/components/object):
 
 Components are grouped by domain: [geometry](src/components/geometry) contains
-sphere, torus, mesh, text and CSG; [material](src/components/material) contains
+sphere, torus, rectangle, mesh, text and CSG; [material](src/components/material) contains
 diffuse, Phong, metal, glass and emissive; [texture](src/components/texture)
 contains the texture alternatives; [light](src/components/light) contains
-rectangle and torus lights. Domain composition files stay directly in the
+legacy light-block parsing/building and rectangle/torus/mesh samplers. There is
+no separate CPU light-shape model. Rectangles lower to two mesh triangles.
+Domain composition files stay directly in the
 domain folder, with each alternative's files in a child folder. Namespaces
 mirror this hierarchy, for example `hip_demo::material::phong`.
 Scene, Object, camera, room and shared value components remain at the root.

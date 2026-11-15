@@ -8,6 +8,7 @@ struct GpuMaterial {
     ShaderKind kind = ShaderKind::diffuse;
     float roughness = 1;
     TextureKind texture = TextureKind::color;
+    bool sampled_emitter = false;
 };
 
 static_assert(std::is_trivially_copyable_v<GpuMaterial>);

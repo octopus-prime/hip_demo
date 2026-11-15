@@ -113,6 +113,33 @@ int main(int argc, char** argv) {
                 "wood ceiling and marble back survive grammar and scene conversion");
         const auto legacy = parse_scene_description(replace(text, "back marble_detail", "back wood_detail"));
         require(std::holds_alternative<Wood>(legacy.settings.room.textures[2]), "existing wood backs remain supported");
+        require(objects<hip_demo::Rectangle>(classic).size() == 1 &&
+                std::get<ConstantColor>(material_of<hip_demo::Rectangle, Emissive>(classic).radiance).color.x == 12 &&
+                std::get<ConstantColor>(std::get<Emissive>(detail.objects.back().material).radiance).color.x == 24,
+                "legacy lights become geometry with their own emitted radiance");
+        const auto light_begin = text.find("light ceiling_rectangle");
+        const auto light_end = text.find('}', light_begin) + 1;
+        require(light_begin != std::string::npos && light_end > light_begin, "legacy light fixture");
+        auto without_light = text;
+        without_light.erase(light_begin, light_end - light_begin);
+        const auto no_light = parse_scene_description(without_light);
+        require(no_light.objects.size() + 1 == scene.objects.size() && !parse_scene_ast(without_light).light,
+                "scenes do not require a separate light block");
+        const auto emissive_text = replace(without_light, "material red = diffuse [0.8, 0.2, 0.1]",
+            "material red = emissive [12, 8, 3]") +
+            "\nrectangle { center [0, 5, 0] width 2 depth 1 material red }\n";
+        const auto emissive_scene = parse_scene_description(emissive_text);
+        const auto emission = prepare_material(objects<Sphere>(emissive_scene)[0]->material);
+        require(emission.kind == ShaderKind::emissive && emission.albedo.x == 12 && emission.albedo.y == 8 &&
+                std::holds_alternative<Emissive>(objects<hip_demo::Rectangle>(emissive_scene)[0]->material),
+                "HDR emissive material is shared by ordinary geometry");
+        rejects_build(replace(emissive_text, "emissive [12, 8, 3]", "emissive [-1, 8, 3]"), "radiance");
+        rejects_build(replace(emissive_text, "emissive [12, 8, 3]", "emissive [1e300, 8, 3]"), "finite float");
+        rejects_build(replace(emissive_text, "width 2", "width 0"), "positive");
+        auto emission_ast = detached_ast(emissive_text, "invalid.hipscene");
+        std::get<hip_demo::material::emissive::Description>(emission_ast.materials[0].value).radiance.x =
+            std::numeric_limits<double>::quiet_NaN();
+        expect_error([&] { build_scene_description(emission_ast); }, "finite float");
         rejects(replace(text, "ceiling wood_detail", "ceiling marble_detail"), "ceiling surface");
         rejects(replace(text, "back marble_detail", "back marble_detail_extra"), "back surface");
         const std::string text_object = R"(

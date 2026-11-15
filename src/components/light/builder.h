@@ -1,14 +1,13 @@
 #pragma once
 
 #include "components/light/description.h"
-#include "components/light/model.h"
 #include "components/light/rectangle/builder.h"
 #include "components/light/torus/builder.h"
 #include <type_traits>
 
 namespace hip_demo::light {
-inline Model build(const Description& source, const room::Model& room, const SceneValues& values) {
-    return std::visit([&](const auto& light) -> Model {
+inline Object build(const Description& source, const room::Model& room, const SceneValues& values) {
+    return std::visit([&](const auto& light) -> Object {
         if constexpr (std::is_same_v<std::decay_t<decltype(light)>, hip_demo::light::rectangle::Description>)
             return hip_demo::light::rectangle::build(light, room, values);
         else
@@ -16,12 +15,4 @@ inline Model build(const Description& source, const room::Model& room, const Sce
     }, source);
 }
 
-inline SceneLight prepare(const Model& value) {
-    return std::visit([](const auto& light) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(light)>, hip_demo::light::rectangle::Model>)
-            return hip_demo::light::rectangle::prepare(light);
-        else
-            return hip_demo::light::torus::prepare(light);
-    }, value);
-}
 }

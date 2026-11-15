@@ -4,6 +4,7 @@
 #include "components/material/phong/parser.h"
 #include "components/material/metal/parser.h"
 #include "components/material/glass/parser.h"
+#include "components/material/emissive/parser.h"
 #include "components/material/description.h"
 
 namespace hip_demo::parsing {
@@ -30,7 +31,7 @@ using hip_demo::parsing::NamedMaterial;
 inline bp::rule<hip_demo::parsing::shader_p_, MaterialValue> shader_p = "material kind";
 inline bp::rule<hip_demo::parsing::material_p_, NamedMaterial> material_p = "named material";
 
-inline auto shader_p_def = diffuse_p | phong_p | metal_p | glass_p;
+inline auto shader_p_def = diffuse_p | phong_p | metal_p | glass_p | emissive_p;
 inline auto material_p_def = position_p >> keyword("material") > identifier_p > '=' > shader_p;
 }
 namespace hip_demo::parsing {

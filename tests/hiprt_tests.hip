@@ -6,6 +6,7 @@
 #include "analytic_intersection_tests.h"
 #include "csg_tests.h"
 #include "csg_text_tests.h"
+#include "emission_tests.h"
 
 using namespace hip_demo;
 
@@ -130,9 +131,11 @@ __global__ void check_mesh(TraceScene scene, unsigned int* failures) {
         const bool mesh_closest = expected && (!custom_hit || expected_distance < custom.distance);
         const bool front_face = dot(ray.direction, expected_normal) < 0.0f;
         const bool crystal = expected_primitive < mesh_triangles.size();
-        const ShaderKind material = crystal ? ShaderKind::phong : ShaderKind::diffuse;
+        const bool rectangle = expected_primitive >= scene.mesh_triangle_count - 2;
+        const ShaderKind material = rectangle ? ShaderKind::emissive :
+            crystal ? ShaderKind::phong : ShaderKind::diffuse;
         if (combined_hit != (expected || custom_hit) ||
-            (mesh_closest && (combined.object_id != scene_object_count + (crystal ? 0 : 1) ||
+            (mesh_closest && (combined.object_id != scene_object_count + (rectangle ? 2 : crystal ? 0 : 1) ||
                               combined.material != material ||
                               combined.front_face != front_face ||
                               !(fabsf(dot(combined.normal, expected_normal)) > 0.999f) ||
@@ -254,12 +257,14 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
         !hit_room({origin, {0.0f, 0.0f, -1.0f}}, 1.0e30f, hit) || hit.material != ShaderKind::diffuse) {
         failed |= 2;
     }
-    if (!hit_room({origin, {0.0f, 1.0f, 0.0f}}, 1.0e30f, hit) ||
+    if (!hit_scene({origin, {0.0f, 1.0f, 0.0f}}, hit, scene) ||
         hit.material != ShaderKind::emissive || !hit.front_face ||
         !hit_room({{2.0f, 2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}, 1.0e30f, hit) ||
         hit.material != ShaderKind::diffuse ||
-        !hit_room({{0.0f, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f}}, 1.0e30f, hit) ||
+        !hit_scene({{0.0f, 5.0f, 0.0f}, {0.0f, -1.0f, 0.0f}}, hit, scene) ||
         hit.material != ShaderKind::emissive || hit.front_face ||
+        !hit_room({origin, {0.0f, 1.0f, 0.0f}}, 1.0e30f, hit) ||
+        hit.material != ShaderKind::diffuse ||
         hit_room({origin, {0.0f, 0.0f, 1.0f}}, 1.0e30f, hit)) {
         failed |= 4;
     }
@@ -610,7 +615,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
     }
     Random random{123456789u};
     for (int i = 0; i < 128; ++i) {
-        const LightSample light = sample_torus_light(random);
+        const LightSample light = sample_light(random, scene);
         const float radial = sqrtf((light.point.x - detail_torus_center.x) *
                                     (light.point.x - detail_torus_center.x) +
                                     (light.point.z - detail_torus_center.z) *
@@ -618,7 +623,8 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
         if (fabsf(torus_distance(light.point, detail_torus_center,
                                  detail_torus_major_radius, detail_torus_minor_radius)) > 0.0001f ||
             fabsf(dot(light.normal, light.normal) - 1.0f) > 0.0001f ||
-            fabsf(light.area_weight - 4.0f * pi * pi * detail_torus_minor_radius * radial) > 0.0001f) {
+            fabsf(1 / light.area_pdf - 4.0f * pi * pi * detail_torus_minor_radius * radial) > 0.0001f ||
+            light.radiance.x != 24) {
             failed |= 4;
         }
     }
@@ -778,7 +784,7 @@ __global__ void check_detail_scene(TraceScene scene, unsigned int* failure) {
 
 void check_loaded_ply(int device, const char* path, MeshUp up) {
     const HiprtScene loaded(device, path, up);
-    if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 1) {
+    if (loaded.scene().mesh_triangle_count != mesh_triangles.size() + 3) {
         throw std::runtime_error("Imported PLY did not replace the cat");
     }
     auto failure = allocate_device<unsigned int>(1, "Allocating PLY intersection check");
@@ -807,7 +813,8 @@ __global__ void check_described_scene(TraceScene scene, unsigned int* failure) {
     if (!hit_scene({{3, 1, 4}, {0, -1, 0}}, hit, scene) ||
         fabsf(hit.distance - 1) > 0.001f || hit.albedo.z != 0.4f) failed |= 4;
     if (!hit_scene({{1, 5, -2}, {0, 1, 0}}, hit, scene) ||
-        hit.material != ShaderKind::emissive || fabsf(hit.distance - 1) > 0.001f) failed |= 8;
+        hit.material != ShaderKind::emissive || fabsf(hit.distance - 1) > 0.001f ||
+        hit.emission.y != 4) failed |= 8;
     for (int index = 0; index < 2; ++index) {
         if (!hit_objects({{static_cast<float>(index * 2), 0.4f, 1}, {0, 0, -1}}, hit, scene) ||
             hit.object_id != static_cast<unsigned int>(index + 2) ||
@@ -815,7 +822,7 @@ __global__ void check_described_scene(TraceScene scene, unsigned int* failure) {
             fabsf(hit.distance - 1) > 0.001f) failed |= 16;
     }
     if (scene.settings->camera_position.z != 12 || scene.settings->half_view_height != 0.4f ||
-        scene.settings->light.radiance.y != 4) failed |= 32;
+        scene.emitter_count != 1) failed |= 32;
     Hit ceiling{}, back{};
     if (scene.settings->textures[1].kind != TextureKind::wood ||
         scene.settings->textures[2].kind != TextureKind::marble) {
@@ -1117,6 +1124,7 @@ int main(int argc, char** argv) {
             run_analytic_intersection_tests();
             run_csg_text_tests(device.id);
             check_material_scene(device.id);
+            run_emission_tests(device.id);
         }
         if (text_mode) {
             check_text_scene(device.id, argv[2]);

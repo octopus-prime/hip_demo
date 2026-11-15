@@ -1,11 +1,20 @@
 #pragma once
 
-#include "scene/common.h"
+#include <cstdint>
 
-struct SceneLight {
-    SceneVector center;
-    SceneVector radiance;
-    float width = 0, depth = 0;
-    float major_radius = 0, minor_radius = 0;
-    bool torus = false;
+namespace hip_demo {
+enum class EmitterKind : std::uint8_t { rectangle, torus, mesh };
+
+struct GpuEmitter {
+    EmitterKind kind;
+    unsigned int object_id;
+    unsigned int first;
+    unsigned int count;
+    double area;
 };
+
+struct EmitterTriangle {
+    unsigned int triangle;
+    double cumulative_area;
+};
+}

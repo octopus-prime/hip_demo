@@ -4,6 +4,6 @@
 
 namespace hip_demo::material::emissive {
 struct Description {
-    scene_ast::Vector albedo;
+    scene_ast::Vector radiance;
 };
 }

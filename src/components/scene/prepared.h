@@ -1,6 +1,7 @@
 #pragma once
 
 #include "components/geometry/text/outline.h"
+#include "components/light/gpu_model.h"
 #include <hip/hip_runtime.h>
 #include <vector>
 
@@ -22,6 +23,8 @@ struct PreparedScene {
     std::vector<GpuCsg> csgs;
     std::vector<GpuCsgLeaf> csg_leaves;
     unsigned int glyph_count = 0;
+    std::vector<GpuEmitter> emitters;
+    std::vector<EmitterTriangle> emitter_triangles;
 };
 
 }

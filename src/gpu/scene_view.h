@@ -26,7 +26,6 @@ struct TraceScene {
     const float4* mesh_vertices;
     unsigned int mesh_triangle_count;
     unsigned int cat_detail_start;
-    bool detail;
     const GpuSceneSettings* settings;
     const GpuPrimitive* primitives;
     const TriangleMaterial* triangle_materials;
@@ -34,6 +33,9 @@ struct TraceScene {
     unsigned int primitive_count;
     const GpuCsg* csgs;
     unsigned int csg_count;
+    const GpuEmitter* emitters = nullptr;
+    unsigned int emitter_count = 0;
+    const EmitterTriangle* emitter_triangles = nullptr;
 };
 
 }

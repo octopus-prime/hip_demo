@@ -24,6 +24,7 @@ __device__ inline void apply_texture(Hit& hit, const Ray& ray, const GpuSceneSet
         hit.albedo = hit.texture == TextureKind::julia
             ? julia_albedo(point, depth, height) : mandelbrot_albedo(point, depth, height);
     }
+    hit.emission = hit.material == ShaderKind::emissive ? hit.albedo : float3{};
 }
 
 }

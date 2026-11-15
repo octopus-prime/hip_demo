@@ -79,7 +79,7 @@ __device__ inline bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene sc
     bool found = hit_objects(ray, closest_hit, scene);
     const float closest_distance = found ? closest_hit.distance : 1.0e30f;
     Hit candidate{};
-    if (hit_room(ray, closest_distance, candidate, scene.detail, scene.settings)) {
+    if (hit_room(ray, closest_distance, candidate, false, scene.settings)) {
         closest_hit = candidate;
         found = true;
     }

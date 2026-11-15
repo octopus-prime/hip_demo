@@ -10,7 +10,7 @@ namespace hip_demo { struct Ray; struct Hit; struct Random; }
 
 namespace hip_demo::material::emissive {
 
-struct Model { Texture albedo = ConstantColor{}; };
+struct Model { Texture radiance = ConstantColor{}; };
 
 #if defined(__HIPCC__)
 struct Shader {

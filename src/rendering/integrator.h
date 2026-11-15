@@ -2,8 +2,7 @@
 
 #include "gpu/traversal.h"
 #include "shader/dispatch.h"
-#include "components/light/rectangle/sampling.h"
-#include "components/light/torus/sampling.h"
+#include "components/light/sampling.h"
 
 namespace hip_demo {
 
@@ -24,37 +23,32 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
             *specular_primary = true;
         }
         if (traits.emissive) {
-            if (include_emission && hit.front_face) {
-                radiance = radiance + throughput * vector3(scene.settings->light.radiance);
+            if (hit.front_face && (include_emission || !hit.sampled_emitter)) {
+                radiance = radiance + throughput * hit.emission;
             }
             break;
         } else if (traits.delta) {
             include_emission = true;
-        } else {
-            LightSample light{};
-            const auto& source = scene.settings->light;
-            if (source.torus) {
-                light = sample_torus_light(random, &source);
-            } else {
-                light = sample_rectangle_light(random, source);
-            }
+        } else if (scene.emitter_count != 0) {
+            const LightSample light = sample_light(random, scene);
             const float3 shadow_origin = hit.point + geometric_normal * 0.002f;
             const float3 to_light = light.point - shadow_origin;
             const float distance_squared = dot(to_light, to_light);
             const float distance = sqrtf(distance_squared);
-            const float3 light_direction = to_light / distance;
+            const float3 light_direction = distance > 0 ? to_light / distance : float3{};
             const float cosine = fmaxf(0.0f, dot(hit.normal, light_direction));
             const float light_cosine = fmaxf(0.0f, dot(light.normal, -light_direction));
             Hit shadow_hit{};
             constexpr float shadow_tolerance = 0.001f;
-            if (cosine > 0.0f && light_cosine > 0.0f &&
+            if (distance_squared > 0 && cosine > 0.0f && light_cosine > 0.0f &&
                 (!hit.has_normal_map || dot(geometric_normal, light_direction) > 0.0f) &&
                 (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
                  shadow_hit.distance >= distance - shadow_tolerance)) {
                 const float3 scattering = evaluate_scattering(ray, hit, light_direction, cosine);
-                radiance = radiance + throughput * scattering * vector3(source.radiance) *
-                    (light_cosine * light.area_weight / distance_squared);
+                radiance = radiance + throughput * scattering * light.radiance *
+                    (light_cosine / (light.area_pdf * distance_squared));
             }
+            // NEE covers all registered emitters, not only the selected one.
             include_emission = false;
         }
 
