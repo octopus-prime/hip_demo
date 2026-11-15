@@ -254,9 +254,17 @@ transform and nonuniform angular-sampling PDF.
 
 Sphere, text and CSG emission remains visible through camera/BSDF rays, but these
 geometries do not yet have direct-light samplers and can converge more slowly.
-To avoid double counting, nondelta BSDF hits count only unsampled emitters;
-camera and delta-bounce hits count all emitters. This partitions the estimators
-without MIS; adding MIS will also require BSDF PDFs.
+Direct-light samples and diffuse/Phong BSDF hits on sampled emitters are combined
+with **multiple importance sampling (MIS)** using the power heuristic. Both PDFs
+use solid angle, including emitter selection and the area-to-solid-angle Jacobian.
+Phong uses the full diffuse/specular mixture PDF and matching scattering weights.
+This avoids double counting while allowing BSDF sampling to efficiently find
+nearby emitting surfaces, such as the underside of the dragon's pedestal.
+Camera hits, existing metal/glass transport and unsampled emitters retain full
+emission contributions; the final bounce uses direct lighting without a competing
+BSDF continuation. MIS reduces sampling variance, not geometry detail, and does
+not clamp radiance or filter pixels. Difficult glass caustics can still converge
+slowly.
 
 Try the self-contained [mesh-light scene](scenes/mesh_light.hipscene), which combines
 a tilted, unequal-triangle panel with an emissive torus.

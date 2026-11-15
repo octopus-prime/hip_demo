@@ -14,4 +14,8 @@ struct LightSample {
     unsigned int triangle;
 };
 
+__device__ inline double solid_angle_pdf(float area_pdf, double distance_squared, float light_cosine) {
+    return light_cosine > 0 ? double(area_pdf) * distance_squared / light_cosine : 0;
+}
+
 }

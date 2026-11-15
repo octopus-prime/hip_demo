@@ -21,4 +21,12 @@ __device__ inline bool scatter(Ray& ray, const Hit& hit, Random& random, float3&
     }, hit.material);
 }
 
+__device__ inline float scattering_pdf(const Ray& ray, const Hit& hit, float3 direction) {
+    if (hit.has_normal_map && dot(hit.geometric_normal, direction) <= 0) return 0;
+    return shader::visit([&] __device__ (auto value) {
+        if constexpr (decltype(value)::traits.delta || decltype(value)::traits.emissive) return 0.0f;
+        else return value.pdf(ray, hit, direction);
+    }, hit.material);
+}
+
 }

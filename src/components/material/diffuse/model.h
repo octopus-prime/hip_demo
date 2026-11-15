@@ -16,6 +16,7 @@ struct Model { Texture albedo = ConstantColor{}; };
 struct Shader {
     static constexpr shader::Traits traits{false, false, false};
     __device__ float3 evaluate(const Ray& ray, const Hit& hit, float3 direction, float cosine) const;
+    __device__ float pdf(const Ray& ray, const Hit& hit, float3 direction) const;
     __device__ bool scatter(Ray& ray, const Hit& hit, Random& random, float3& throughput) const;
 };
 #endif

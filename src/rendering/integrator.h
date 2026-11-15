@@ -3,13 +3,14 @@
 #include "gpu/traversal.h"
 #include "shader/dispatch.h"
 #include "components/light/sampling.h"
+#include "rendering/mis.h"
 
 namespace hip_demo {
 
 __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* specular_primary = nullptr) {
     float3 radiance{0.0f, 0.0f, 0.0f};
     float3 throughput{1.0f, 1.0f, 1.0f};
-    bool include_emission = true;
+    float previous_bsdf_pdf = 0;
 
     for (int bounce = 0; bounce < maximum_bounces; ++bounce) {
         Hit hit{};
@@ -23,13 +24,13 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
             *specular_primary = true;
         }
         if (traits.emissive) {
-            if (hit.front_face && (include_emission || !hit.sampled_emitter)) {
-                radiance = radiance + throughput * hit.emission;
+            if (hit.front_face) {
+                const float weight = previous_bsdf_pdf > 0 && hit.sampled_emitter
+                    ? power_heuristic(previous_bsdf_pdf, light_pdf(ray, hit, scene)) : 1;
+                radiance = radiance + throughput * hit.emission * weight;
             }
             break;
-        } else if (traits.delta) {
-            include_emission = true;
-        } else if (scene.emitter_count != 0) {
+        } else if (!traits.delta && scene.emitter_count != 0) {
             const LightSample light = sample_light(random, scene);
             const float3 shadow_origin = hit.point + geometric_normal * 0.002f;
             const float3 to_light = light.point - shadow_origin;
@@ -45,19 +46,25 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
                 (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
                  shadow_hit.distance >= distance - shadow_tolerance)) {
                 const float3 scattering = evaluate_scattering(ray, hit, light_direction, cosine);
+                const double light_density = solid_angle_pdf(light.area_pdf, distance_squared, light_cosine);
+                // At the depth limit there is no competing BSDF continuation.
+                const float bsdf_density = bounce + 1 < maximum_bounces
+                    ? scattering_pdf(ray, hit, light_direction) : 0;
+                const float weight = power_heuristic(light_density, bsdf_density);
                 radiance = radiance + throughput * scattering * light.radiance *
-                    (light_cosine / (light.area_pdf * distance_squared));
+                    static_cast<float>(weight / light_density);
             }
-            // NEE covers all registered emitters, not only the selected one.
-            include_emission = false;
         }
 
+        if (bounce + 1 == maximum_bounces) break;
+        const Ray incoming = ray;
         if (!scatter(ray, hit, random, throughput)) {
             break;
         }
         if (!traits.delta && hit.has_normal_map && dot(ray.direction, geometric_normal) <= 0.0f) {
             break;
         }
+        previous_bsdf_pdf = traits.delta ? 0 : scattering_pdf(incoming, hit, ray.direction);
         ray.origin = hit.point + geometric_normal * (dot(ray.direction, geometric_normal) > 0.0f ? 0.002f : -0.002f);
     }
     return radiance;

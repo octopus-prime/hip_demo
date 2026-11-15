@@ -39,4 +39,33 @@ __device__ inline LightSample sample_light(Random& random, TraceScene scene) {
     sample.radiance = surface.emission;
     return sample;
 }
+
+__device__ inline double light_pdf(const Ray& ray, const Hit& hit, TraceScene scene) {
+    if (!hit.sampled_emitter) return 0;
+    for (unsigned int index = 0; index < scene.emitter_count; ++index) {
+        const auto& emitter = scene.emitters[index];
+        if (emitter.object_id != hit.object_id) continue;
+        float area_pdf = 0;
+        switch (emitter.kind) {
+        case EmitterKind::torus: {
+            const auto& torus = scene.primitives[emitter.first].geometry.torus;
+            const float3 local = rotate_x(hit.point - vector3(torus.center), -torus.tilt_sine, torus.tilt_cosine);
+            area_pdf = torus_light_area_pdf(torus, sqrtf(local.x * local.x + local.z * local.z));
+            break;
+        }
+        case EmitterKind::rectangle:
+        case EmitterKind::mesh:
+            area_pdf = static_cast<float>(1 / emitter.area);
+            break;
+        default:
+            __builtin_trap();
+        }
+        area_pdf /= scene.emitter_count;
+        const float3 offset = hit.point - ray.origin;
+        const double distance_squared = double(offset.x) * offset.x + double(offset.y) * offset.y +
+                                        double(offset.z) * offset.z;
+        return solid_angle_pdf(area_pdf, distance_squared, dot(hit.geometric_normal, -ray.direction));
+    }
+    __builtin_trap();
+}
 }
