@@ -198,6 +198,10 @@ horizontally centered, and placed with their bottom at the configured Y position
 PLY files may be ASCII or little-/big-endian binary, but **faces must already be
 triangles**. Vertex colors, normals and texture coordinates are ignored.
 
+Triangle meshes use HIP RT's high-quality BVH builder, favoring traversal speed
+over the fastest scene preparation. Triangle pairing remains disabled with the
+current unindexed, expanded triangle buffer.
+
 ## Editing scene files
 
 Start with a supplied `.hipscene` file. Sections remain in this order:
@@ -314,6 +318,11 @@ BSDF continuation. MIS reduces sampling variance, not geometry detail, and does
 not clamp radiance or filter pixels. Difficult glass caustics can still converge
 slowly.
 
+Direct-light visibility uses distance-bounded HIP RT any-hit traversal without
+material or texture shading, stopping as soon as a blocker is found. Room walls
+also block these rays; glass remains opaque to this visibility query, as before.
+The light endpoint tolerance, sample count and path estimator are unchanged.
+
 Try the self-contained [mesh-light scene](scenes/mesh_light.hipscene), which combines
 a tilted, unequal-triangle panel with an emissive torus.
 The [dragon-light scene](scenes/dragon_light.hipscene) uses the Detail dragon as
@@ -395,17 +404,18 @@ subtractions are empty. Nearly coincident boundaries are grouped within
 disappear. At edges where multiple surfaces meet, the selected normal is
 deterministic but not unique. Deep/large constructions cost more than simple
 primitives; bounding boxes are not tightened for individual Boolean operations.
-Text CSG caches analytic intersections and normals per ray, then advances
-paired contour winding, cap occupancy and Boolean states without repeatedly
-solving the same polynomials; identical operands share their cached events.
+CSG evaluation caches analytic intersections and normals per ray, then advances
+primitive parity, paired text contour winding, cap occupancy and Boolean states
+without repeatedly solving the same polynomials; identical operands share their
+cached events.
 Cap membership normally uses those cached
 crossings; ambiguous cap/contour edges retain the original point-fill tie-break.
 The fast path uses local scratch for 64 events, 32 intersected glyphs and 64
 leaf instructions. If any capacity is exceeded, the unrestricted boundary
 streaming path is used instead: hits are never truncated and there is no
 four-hit limit. Long strings and many overlapping operands can therefore
-still cost substantially more than standalone text. Pure sphere/torus CSG
-and standalone text keep their existing intersection paths.
+still cost substantially more than standalone text. Standalone text keeps its
+existing intersection path.
 
 ### Migration from the previous CLI and scene format
 

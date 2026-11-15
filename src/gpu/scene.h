@@ -153,7 +153,7 @@ public:
         mesh_input.primitive.triangleMesh.vertexStride = sizeof(float4);
         mesh_input.primitive.triangleMesh.triangleCount = mesh_triangle_count_;
         hiprtBuildOptions mesh_options{};
-        mesh_options.buildFlags = hiprtBuildFlagBitDisableTrianglePairing;
+        mesh_options.buildFlags = hiprtBuildFlagBitPreferHighQualityBuild | hiprtBuildFlagBitDisableTrianglePairing;
         std::size_t mesh_temporary_size = 0;
         check_hiprt(hiprtGetGeometryBuildTemporaryBufferSize(context_.value, mesh_input, mesh_options,
                                                              mesh_temporary_size),

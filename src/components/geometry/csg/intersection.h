@@ -160,13 +160,9 @@ __device__ inline bool intersect_csg_uncached(const Ray& ray, const GpuCsg& obje
 
 __device__ inline bool intersect_csg(const Ray& ray, const GpuCsg& object, const GpuCsgLeaf* leaves,
                                     float minimum, float maximum, Hit& hit, TextGeometryView text = {}) {
-    for (std::uint32_t i = 0; i < object.leaf_count; ++i) {
-        if (!leaves[object.first_leaf + i].text) continue;
-        bool usable = false;
-        const bool found = intersect_csg_cached(ray, object, leaves, minimum, maximum, hit, text, usable);
-        if (usable) return found;
-        break;
-    }
+    bool usable = false;
+    const bool found = intersect_csg_cached(ray, object, leaves, minimum, maximum, hit, text, usable);
+    if (usable) return found;
     return intersect_csg_uncached(ray, object, leaves, minimum, maximum, hit, text);
 }
 

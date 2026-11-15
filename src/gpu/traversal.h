@@ -86,4 +86,29 @@ __device__ inline bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene sc
     return found;
 }
 
+__device__ inline bool occluded(const Ray& ray, float maximum_distance, TraceScene scene) {
+    if (maximum_distance <= 0.001f) return false;
+    Hit room_hit{};
+    int wall = 0;
+    if (intersect_room(ray, maximum_distance, room_hit, wall, scene.settings)) return true;
+    hiprtRay traversal_ray{};
+    traversal_ray.origin = ray.origin;
+    traversal_ray.direction = ray.direction;
+    traversal_ray.minT = 0.001f;
+    traversal_ray.maxT = maximum_distance;
+    if (scene.geometry) {
+        hiprtGeomCustomTraversalAnyHit traversal(
+            scene.geometry, traversal_ray, hiprtTraversalHintDefault, nullptr, scene.functions);
+        if (traversal.getNextHit().hasHit()) return true;
+    }
+    if (scene.mesh) {
+        // HIP RT triangles accept maxT inclusively; shadow endpoints must not block.
+        traversal_ray.maxT = nextafterf(maximum_distance, -INFINITY);
+        hiprtGeomTraversalAnyHit traversal(scene.mesh, traversal_ray);
+        const auto hit = traversal.getNextHit();
+        return hit.hasHit() && hit.t < maximum_distance;
+    }
+    return false;
+}
+
 }

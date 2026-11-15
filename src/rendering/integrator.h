@@ -39,12 +39,10 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
             const float3 light_direction = distance > 0 ? to_light / distance : float3{};
             const float cosine = fmaxf(0.0f, dot(hit.normal, light_direction));
             const float light_cosine = fmaxf(0.0f, dot(light.normal, -light_direction));
-            Hit shadow_hit{};
             constexpr float shadow_tolerance = 0.001f;
             if (distance_squared > 0 && cosine > 0.0f && light_cosine > 0.0f &&
                 (!hit.has_normal_map || dot(geometric_normal, light_direction) > 0.0f) &&
-                (!hit_scene({shadow_origin, light_direction}, shadow_hit, scene) ||
-                 shadow_hit.distance >= distance - shadow_tolerance)) {
+                !occluded({shadow_origin, light_direction}, distance - shadow_tolerance, scene)) {
                 const float3 scattering = evaluate_scattering(ray, hit, light_direction, cosine);
                 const double light_density = solid_angle_pdf(light.area_pdf, distance_squared, light_cosine);
                 // At the depth limit there is no competing BSDF continuation.
