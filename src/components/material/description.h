@@ -1,16 +1,16 @@
 #pragma once
 
-#include "components/diffuse/description.h"
-#include "components/phong/description.h"
-#include "components/metal/description.h"
-#include "components/glass/description.h"
-#include "components/emissive/description.h"
+#include "components/material/diffuse/description.h"
+#include "components/material/phong/description.h"
+#include "components/material/metal/description.h"
+#include "components/material/glass/description.h"
+#include "components/material/emissive/description.h"
 #include <string>
 #include <variant>
 
 namespace scene_ast {
-using MaterialValue = std::variant<hip_demo::diffuse::Description, hip_demo::phong::Description,
-    hip_demo::metal::Description, hip_demo::glass::Description, hip_demo::emissive::Description>;
+using MaterialValue = std::variant<hip_demo::material::diffuse::Description, hip_demo::material::phong::Description,
+    hip_demo::material::metal::Description, hip_demo::material::glass::Description, hip_demo::material::emissive::Description>;
 }
 namespace hip_demo::material {
 struct Description {

@@ -2,11 +2,11 @@
 
 #include "components/object/description.h"
 #include "components/object/model.h"
-#include "components/sphere/builder.h"
-#include "components/torus/builder.h"
-#include "components/text/builder.h"
-#include "components/csg/builder.h"
-#include "components/mesh/builder.h"
+#include "components/geometry/sphere/builder.h"
+#include "components/geometry/torus/builder.h"
+#include "components/geometry/text/builder.h"
+#include "components/geometry/csg/builder.h"
+#include "components/geometry/mesh/builder.h"
 #include <map>
 #include <type_traits>
 #include <utility>
@@ -23,15 +23,15 @@ inline Model build(const Description& source, const std::map<std::string, Materi
     return std::visit([&](const auto& value) -> Model {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, scene_ast::Sphere>)
-            return {sphere::build(value, values), material_reference(value)};
+            return {hip_demo::geometry::sphere::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Torus>)
-            return {torus::build(value, values), material_reference(value)};
+            return {hip_demo::geometry::torus::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Text>)
-            return {text::build(value, values), material_reference(value)};
+            return {hip_demo::geometry::text::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Csg>)
-            return {csg::build(value, values), material_reference(value)};
+            return {hip_demo::geometry::csg::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Mesh>)
-            return {mesh::build(value, values), material_reference(value)};
+            return {hip_demo::geometry::mesh::build(value, values), material_reference(value)};
         else {
             static_assert(std::is_same_v<T, SceneMeshKind>);
             Mesh geometry;

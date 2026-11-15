@@ -1,4 +1,4 @@
 #pragma once
 
-#include "components/sphere/model.h"
-#include "components/torus/model.h"
+#include "components/geometry/sphere/model.h"
+#include "components/geometry/torus/model.h"

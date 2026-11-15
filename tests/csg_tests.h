@@ -1,6 +1,6 @@
 #pragma once
 
-#include "components/csg/intersection.h"
+#include "components/geometry/csg/intersection.h"
 #include <filesystem>
 
 namespace hip_demo {

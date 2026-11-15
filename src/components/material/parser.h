@@ -1,9 +1,9 @@
 #pragma once
 
-#include "components/diffuse/parser.h"
-#include "components/phong/parser.h"
-#include "components/metal/parser.h"
-#include "components/glass/parser.h"
+#include "components/material/diffuse/parser.h"
+#include "components/material/phong/parser.h"
+#include "components/material/metal/parser.h"
+#include "components/material/glass/parser.h"
 #include "components/material/description.h"
 
 namespace hip_demo::parsing {

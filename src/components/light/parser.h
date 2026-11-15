@@ -1,7 +1,7 @@
 #pragma once
 
-#include "components/rectangle_light/parser.h"
-#include "components/torus_light/parser.h"
+#include "components/light/rectangle/parser.h"
+#include "components/light/torus/parser.h"
 #include "components/light/description.h"
 
 namespace hip_demo::parsing {

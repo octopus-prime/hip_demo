@@ -131,9 +131,9 @@ text { font "font.ttf" value "BO S" size 1.5 depth 0.2 position [-1, 0.2, 0] mat
                 owned_ast.text.substr(owned_ast.camera.where, 6) == "camera",
                 "AST owns source text, name, and stable source offsets after copy and move");
         const auto owned_scene = build_scene_description(owned_ast);
-        const auto& metal_description = std::get<metal::Description>(owned_ast.materials.at(1).value);
+        const auto& metal_description = std::get<hip_demo::material::metal::Description>(owned_ast.materials.at(1).value);
         require(metal_description.roughness == 0.3 &&
-                std::holds_alternative<diffuse::Description>(owned_ast.materials.at(0).value),
+                std::holds_alternative<hip_demo::material::diffuse::Description>(owned_ast.materials.at(0).value),
                 "component parser preserves typed shader descriptions and double-valued AST parameters");
         require(objects<Mesh>(owned_scene).size() == 2 &&
                 geometry_of<Mesh>(owned_scene).file == "triangle_ascii.ply" &&

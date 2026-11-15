@@ -400,6 +400,15 @@ not a virtual class hierarchy. Each type lives in its own
 [component](src/components), including [Scene](src/components/scene) and
 [Object](src/components/object):
 
+Components are grouped by domain: [geometry](src/components/geometry) contains
+sphere, torus, mesh, text and CSG; [material](src/components/material) contains
+diffuse, Phong, metal, glass and emissive; [texture](src/components/texture)
+contains the texture alternatives; [light](src/components/light) contains
+rectangle and torus lights. Domain composition files stay directly in the
+domain folder, with each alternative's files in a child folder. Namespaces
+mirror this hierarchy, for example `hip_demo::material::phong`.
+Scene, Object, camera, room and shared value components remain at the root.
+
 - `description.h`: owned AST data, with double-valued numeric parameters.
 - `parser.h`: Boost.Parser rules and definitions, in the component's
   `parsing` namespace. [parser.cpp](src/parsing/parser.cpp) registers all rules
@@ -410,9 +419,9 @@ not a virtual class hierarchy. Each type lives in its own
 - `gpu_model.h` / `preparation.h`, where needed: buffer-facing payloads and
   lowering of resource-owning values.
 
-For example, [sphere](src/components/sphere) owns its description, both ordinary
+For example, [sphere](src/components/geometry/sphere) owns its description, both ordinary
 and CSG grammar rules, validated builder, bounds and analytic intersections.
-`hip_demo::sphere::Model` is also available as `hip_demo::Sphere`; corresponding
+`hip_demo::geometry::sphere::Model` is also available as `hip_demo::Sphere`; corresponding
 aliases keep the existing C++ object-construction API usable.
 Scene settings compose camera and room models and a typed light variant:
 use `scene.settings.camera.position` and `scene.settings.room.textures`.

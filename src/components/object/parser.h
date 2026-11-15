@@ -1,7 +1,7 @@
 #pragma once
 
-#include "components/csg/parser.h"
-#include "components/mesh/parser.h"
+#include "components/geometry/csg/parser.h"
+#include "components/geometry/mesh/parser.h"
 #include "components/object/description.h"
 
 namespace hip_demo::parsing {

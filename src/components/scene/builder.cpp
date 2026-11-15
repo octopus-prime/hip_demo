@@ -36,7 +36,7 @@ Model build(const Description& parsed) {
     settings.light = light::build(parsed.light, settings.room, values);
     for (const auto& object : parsed.objects)
         scene.objects.push_back(hip_demo::object::build(object, materials, values));
-    if (const auto* light = std::get_if<torus_light::Model>(&settings.light)) {
+    if (const auto* light = std::get_if<hip_demo::light::torus::Model>(&settings.light)) {
         scene.objects.push_back({hip_demo::Torus{light->center, light->major_radius, light->minor_radius},
                                  hip_demo::Emissive{hip_demo::ConstantColor{{1, 1, 1}}}});
     }

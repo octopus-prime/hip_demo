@@ -1,8 +1,8 @@
 #pragma once
 
-#include "components/csg/preparation.h"
-#include "components/csg/builder.h"
-#include "components/csg/intersection.h"
+#include "components/geometry/csg/preparation.h"
+#include "components/geometry/csg/builder.h"
+#include "components/geometry/csg/intersection.h"
 
 namespace hip_demo {
 
@@ -145,7 +145,7 @@ inline void run_csg_text_tests(int device) {
     const GpuMaterial material{{0.1f, 0.2f, 0.9f}, ShaderKind::phong, 0};
     const SceneDiagnostics errors{"", "synthetic-text-csg"};
     const auto append = [&](CsgNode node) {
-        append_csg(prepared, csg::build(scene_ast::Csg{0, {}, std::move(node)}, SceneValues{errors}), material, texts);
+        append_csg(prepared, hip_demo::geometry::csg::build(scene_ast::Csg{0, {}, std::move(node)}, SceneValues{errors}), material, texts);
     };
     append(branch(CsgOperation::unite, text_node(0), sphere_node(1.5, 1.5, 0.25, 0.6)));
     append(branch(CsgOperation::difference, text_node(20), sphere_node(20.5, 1.5, 0.4, 0.2)));

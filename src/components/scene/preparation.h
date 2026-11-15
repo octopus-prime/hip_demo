@@ -1,11 +1,11 @@
 #pragma once
 
 #include "components/scene/prepared.h"
-#include "components/mesh/fitting.h"
+#include "components/geometry/mesh/fitting.h"
 #include "components/geometry/bounds.h"
 #include "components/material/builder.h"
 #include "components/scene/settings.h"
-#include "components/csg/preparation.h"
+#include "components/geometry/csg/preparation.h"
 #include <utility>
 
 namespace hip_demo {

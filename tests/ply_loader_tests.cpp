@@ -1,4 +1,4 @@
-#include "components/mesh/loading.h"
+#include "components/geometry/mesh/loading.h"
 
 #include <algorithm>
 #include <array>

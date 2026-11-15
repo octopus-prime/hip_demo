@@ -289,7 +289,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     }
     float cosine_sum = 0.0f;
     for (int i = 0; i < 2048; ++i) {
-        const float3 direction = phong::sample_phong_lobe({0.0f, 1.0f, 0.0f}, random);
+        const float3 direction = hip_demo::material::phong::sample_phong_lobe({0.0f, 1.0f, 0.0f}, random);
         if (!(direction.y >= 0.0f) || fabsf(dot(direction, direction) - 1.0f) > 0.0001f) {
             failed |= 16;
         }
@@ -456,11 +456,11 @@ __global__ void check_shader_visitor(unsigned int* failure) {
         };
         bool matches = false;
         switch (kinds[i]) {
-        case ShaderKind::diffuse: matches = compare(diffuse::Shader{}); break;
-        case ShaderKind::phong: matches = compare(phong::Shader{}); break;
-        case ShaderKind::metal: matches = compare(metal::Shader{}); break;
-        case ShaderKind::glass: matches = compare(glass::Shader{}); break;
-        case ShaderKind::emissive: matches = compare(emissive::Shader{}); break;
+        case ShaderKind::diffuse: matches = compare(hip_demo::material::diffuse::Shader{}); break;
+        case ShaderKind::phong: matches = compare(hip_demo::material::phong::Shader{}); break;
+        case ShaderKind::metal: matches = compare(hip_demo::material::metal::Shader{}); break;
+        case ShaderKind::glass: matches = compare(hip_demo::material::glass::Shader{}); break;
+        case ShaderKind::emissive: matches = compare(hip_demo::material::emissive::Shader{}); break;
         }
         if (!matches) failed |= 1u << i;
     }

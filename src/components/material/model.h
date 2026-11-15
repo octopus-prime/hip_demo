@@ -1,10 +1,10 @@
 #pragma once
 
-#include "components/diffuse/model.h"
-#include "components/phong/model.h"
-#include "components/metal/model.h"
-#include "components/glass/model.h"
-#include "components/emissive/model.h"
+#include "components/material/diffuse/model.h"
+#include "components/material/phong/model.h"
+#include "components/material/metal/model.h"
+#include "components/material/glass/model.h"
+#include "components/material/emissive/model.h"
 #include <variant>
 
 namespace hip_demo::material {

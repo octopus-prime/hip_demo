@@ -1,11 +1,11 @@
 #pragma once
 
 #include "shader/visit.h"
-#include "components/diffuse/scattering.h"
-#include "components/glass/scattering.h"
-#include "components/metal/scattering.h"
-#include "components/phong/scattering.h"
-#include "components/emissive/scattering.h"
+#include "components/material/diffuse/scattering.h"
+#include "components/material/glass/scattering.h"
+#include "components/material/metal/scattering.h"
+#include "components/material/phong/scattering.h"
+#include "components/material/emissive/scattering.h"
 
 namespace hip_demo {
 

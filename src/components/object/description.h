@@ -1,7 +1,7 @@
 #pragma once
 
-#include "components/csg/description.h"
-#include "components/mesh/description.h"
+#include "components/geometry/csg/description.h"
+#include "components/geometry/mesh/description.h"
 
 namespace hip_demo::object {
 using Description = std::variant<scene_ast::Sphere, scene_ast::Torus, scene_ast::Mesh,

@@ -1,11 +1,11 @@
 #pragma once
 
-#include "components/color/parser.h"
-#include "components/wood/parser.h"
-#include "components/marble/parser.h"
-#include "components/tiles/parser.h"
-#include "components/mandelbrot/parser.h"
-#include "components/julia/parser.h"
+#include "components/texture/color/parser.h"
+#include "components/texture/wood/parser.h"
+#include "components/texture/marble/parser.h"
+#include "components/texture/tiles/parser.h"
+#include "components/texture/mandelbrot/parser.h"
+#include "components/texture/julia/parser.h"
 #include "components/texture/description.h"
 
 namespace hip_demo::parsing {

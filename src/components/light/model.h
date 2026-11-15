@@ -1,11 +1,11 @@
 #pragma once
 
-#include "components/rectangle_light/model.h"
-#include "components/torus_light/model.h"
+#include "components/light/rectangle/model.h"
+#include "components/light/torus/model.h"
 #include <variant>
 
 namespace hip_demo::light {
 
-using Model = std::variant<rectangle_light::Model, torus_light::Model>;
+using Model = std::variant<hip_demo::light::rectangle::Model, hip_demo::light::torus::Model>;
 
 }

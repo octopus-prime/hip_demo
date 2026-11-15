@@ -1,6 +1,6 @@
 #pragma once
 
-#include "components/text/outline.h"
+#include "components/geometry/text/outline.h"
 #include <hip/hip_runtime.h>
 #include <vector>
 

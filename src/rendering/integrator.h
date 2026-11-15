@@ -2,8 +2,8 @@
 
 #include "gpu/traversal.h"
 #include "shader/dispatch.h"
-#include "components/rectangle_light/sampling.h"
-#include "components/torus_light/sampling.h"
+#include "components/light/rectangle/sampling.h"
+#include "components/light/torus/sampling.h"
 
 namespace hip_demo {
 

@@ -4,26 +4,26 @@
 #include "components/texture/model.h"
 #include "components/texture/gpu_model.h"
 #include "components/value/builder.h"
-#include "components/color/builder.h"
-#include "components/tiles/builder.h"
-#include "components/wood/builder.h"
-#include "components/marble/builder.h"
-#include "components/mandelbrot/builder.h"
-#include "components/julia/builder.h"
+#include "components/texture/color/builder.h"
+#include "components/texture/tiles/builder.h"
+#include "components/texture/wood/builder.h"
+#include "components/texture/marble/builder.h"
+#include "components/texture/mandelbrot/builder.h"
+#include "components/texture/julia/builder.h"
 #include <type_traits>
 
 namespace hip_demo::texture {
 inline Model build(const Description& value, scene_ast::Position where, const SceneValues& values) {
     return std::visit([&](const auto& source) -> Model {
         using T = std::decay_t<decltype(source)>;
-        if constexpr (std::is_same_v<T, color::Description>) return color::build(source, where, values);
-        else if constexpr (std::is_same_v<T, tiles::Description>) return tiles::build(source);
-        else if constexpr (std::is_same_v<T, wood::Description>) return wood::build(source);
-        else if constexpr (std::is_same_v<T, marble::Description>) return marble::build(source);
-        else if constexpr (std::is_same_v<T, mandelbrot::Description>) return mandelbrot::build(source);
+        if constexpr (std::is_same_v<T, hip_demo::texture::color::Description>) return hip_demo::texture::color::build(source, where, values);
+        else if constexpr (std::is_same_v<T, hip_demo::texture::tiles::Description>) return hip_demo::texture::tiles::build(source);
+        else if constexpr (std::is_same_v<T, hip_demo::texture::wood::Description>) return hip_demo::texture::wood::build(source);
+        else if constexpr (std::is_same_v<T, hip_demo::texture::marble::Description>) return hip_demo::texture::marble::build(source);
+        else if constexpr (std::is_same_v<T, hip_demo::texture::mandelbrot::Description>) return hip_demo::texture::mandelbrot::build(source);
         else {
-            static_assert(std::is_same_v<T, julia::Description>);
-            return julia::build(source);
+            static_assert(std::is_same_v<T, hip_demo::texture::julia::Description>);
+            return hip_demo::texture::julia::build(source);
         }
     }, value);
 }

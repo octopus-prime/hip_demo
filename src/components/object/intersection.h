@@ -1,7 +1,7 @@
 #pragma once
 
-#include "components/sphere/intersection.h"
-#include "components/torus/intersection.h"
+#include "components/geometry/sphere/intersection.h"
+#include "components/geometry/torus/intersection.h"
 
 namespace hip_demo {
 
