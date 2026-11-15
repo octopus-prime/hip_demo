@@ -13,13 +13,5 @@ struct SceneVector {
     bool operator==(const SceneVector&) const = default;
 };
 
-struct SceneLight {
-    SceneVector center;
-    SceneVector radiance;
-    float width = 0, depth = 0;
-    float major_radius = 0, minor_radius = 0;
-    bool torus = false;
-};
-
 inline constexpr std::uint32_t csg_inside = ~std::uint32_t{0};
 inline constexpr std::uint32_t csg_outside = csg_inside - 1;

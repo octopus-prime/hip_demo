@@ -1,6 +1,6 @@
-#include "building/scene_description.h"
+#include "components/scene/builder.h"
 #include "parsing/parser.h"
-#include "building/material.h"
+#include "components/material/builder.h"
 
 #include <cmath>
 #include <filesystem>
@@ -65,12 +65,12 @@ auto objects(const SceneDescription& scene) {
 }
 
 template <typename Geometry>
-const Geometry& geometry(const SceneDescription& scene, std::size_t index = 0) {
+const Geometry& geometry_of(const SceneDescription& scene, std::size_t index = 0) {
     return std::get<Geometry>(objects<Geometry>(scene).at(index)->geometry);
 }
 
 template <typename Geometry, typename Material>
-const Material& material(const SceneDescription& scene, std::size_t index = 0) {
+const Material& material_of(const SceneDescription& scene, std::size_t index = 0) {
     return std::get<Material>(objects<Geometry>(scene).at(index)->material);
 }
 
@@ -90,40 +90,40 @@ int main(int argc, char** argv) {
         using namespace hip_demo;
         require(objects<Sphere>(classic).size() + objects<Torus>(classic).size() == 7 &&
                 objects<Mesh>(classic).size() == 2 &&
-                geometry<Mesh>(classic, 0).kind == SceneMeshKind::crystal &&
-                geometry<Mesh>(classic, 1).kind == SceneMeshKind::cat, "classic scene conversion");
-        require(std::abs(geometry<Torus>(classic).tilt_sine + 0.8660254f) < 1e-6f,
+                geometry_of<Mesh>(classic, 0).kind == SceneMeshKind::crystal &&
+                geometry_of<Mesh>(classic, 1).kind == SceneMeshKind::cat, "classic scene conversion");
+        require(std::abs(geometry_of<Torus>(classic).tilt_sine + 0.8660254f) < 1e-6f,
                 "tilt_x uses degrees");
         require(objects<Sphere>(detail).size() + objects<Torus>(detail).size() == 3 &&
                 std::holds_alternative<Emissive>(detail.objects.back().material) &&
-                std::holds_alternative<Tiles>(detail.settings.textures[0]) &&
-                std::holds_alternative<Wood>(detail.settings.textures[1]) &&
-                std::holds_alternative<Marble>(detail.settings.textures[2]), "detail scene conversion");
+                std::holds_alternative<Tiles>(detail.settings.room.textures[0]) &&
+                std::holds_alternative<Wood>(detail.settings.room.textures[1]) &&
+                std::holds_alternative<Marble>(detail.settings.room.textures[2]), "detail scene conversion");
         const auto scene = load_scene_description(argv[1]);
-        require(objects<Mesh>(scene).size() == 2 && material<Mesh, Metal>(scene, 1).roughness == 0.3f &&
-                geometry<Mesh>(scene, 1).position.x == 2, "independent mesh transforms and materials");
-        require(std::filesystem::path(geometry<Mesh>(scene).file).is_absolute() &&
-                std::filesystem::exists(geometry<Mesh>(scene).file), "mesh paths resolve relative to scene");
+        require(objects<Mesh>(scene).size() == 2 && material_of<Mesh, Metal>(scene, 1).roughness == 0.3f &&
+                geometry_of<Mesh>(scene, 1).position.x == 2, "independent mesh transforms and materials");
+        require(std::filesystem::path(geometry_of<Mesh>(scene).file).is_absolute() &&
+                std::filesystem::exists(geometry_of<Mesh>(scene).file), "mesh paths resolve relative to scene");
         std::ifstream file(argv[1]);
         const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         const auto compact = parse_scene_description(replace(text, "camera {", "camera{"));
-        require(compact.settings.camera_position.z == 12, "punctuation does not require whitespace");
-        require(std::holds_alternative<Wood>(compact.settings.textures[1]) &&
-                std::holds_alternative<Marble>(compact.settings.textures[2]),
+        require(compact.settings.camera.position.z == 12, "punctuation does not require whitespace");
+        require(std::holds_alternative<Wood>(compact.settings.room.textures[1]) &&
+                std::holds_alternative<Marble>(compact.settings.room.textures[2]),
                 "wood ceiling and marble back survive grammar and scene conversion");
         const auto legacy = parse_scene_description(replace(text, "back marble_detail", "back wood_detail"));
-        require(std::holds_alternative<Wood>(legacy.settings.textures[2]), "existing wood backs remain supported");
+        require(std::holds_alternative<Wood>(legacy.settings.room.textures[2]), "existing wood backs remain supported");
         rejects(replace(text, "ceiling wood_detail", "ceiling marble_detail"), "ceiling surface");
         rejects(replace(text, "back marble_detail", "back marble_detail_extra"), "back surface");
         const std::string text_object = R"(
 text { font "font.ttf" value "BO S" size 1.5 depth 0.2 position [-1, 0.2, 0] material blue }
 )";
         const auto escaped = parse_scene_description(text + replace(text_object, "font.ttf", R"(dir\\a\"b.ttf)"));
-        require(geometry<ExtrudedText>(escaped).font == "dir\\a\"b.ttf", "quoted string escapes");
+        require(geometry_of<ExtrudedText>(escaped).font == "dir\\a\"b.ttf", "quoted string escapes");
         const auto with_text = parse_scene_description(text + text_object);
-        require(objects<ExtrudedText>(with_text).size() == 1 && geometry<ExtrudedText>(with_text).value == "BO S" &&
-                geometry<ExtrudedText>(with_text).size == 1.5f && geometry<ExtrudedText>(with_text).depth == 0.2f &&
-                geometry<ExtrudedText>(with_text).position.x == -1 &&
+        require(objects<ExtrudedText>(with_text).size() == 1 && geometry_of<ExtrudedText>(with_text).value == "BO S" &&
+                geometry_of<ExtrudedText>(with_text).size == 1.5f && geometry_of<ExtrudedText>(with_text).depth == 0.2f &&
+                geometry_of<ExtrudedText>(with_text).position.x == -1 &&
                 std::holds_alternative<Metal>(objects<ExtrudedText>(with_text)[0]->material),
                 "text grammar and conversion");
         const auto owned_ast = detached_ast(text + text_object, "owned.hipscene");
@@ -131,11 +131,15 @@ text { font "font.ttf" value "BO S" size 1.5 depth 0.2 position [-1, 0.2, 0] mat
                 owned_ast.text.substr(owned_ast.camera.where, 6) == "camera",
                 "AST owns source text, name, and stable source offsets after copy and move");
         const auto owned_scene = build_scene_description(owned_ast);
+        const auto& metal_description = std::get<metal::Description>(owned_ast.materials.at(1).value);
+        require(metal_description.roughness == 0.3 &&
+                std::holds_alternative<diffuse::Description>(owned_ast.materials.at(0).value),
+                "component parser preserves typed shader descriptions and double-valued AST parameters");
         require(objects<Mesh>(owned_scene).size() == 2 &&
-                geometry<Mesh>(owned_scene).file == "triangle_ascii.ply" &&
+                geometry_of<Mesh>(owned_scene).file == "triangle_ascii.ply" &&
                 std::holds_alternative<Metal>(objects<Mesh>(owned_scene)[1]->material) &&
-                objects<ExtrudedText>(owned_scene).size() == 1 && geometry<ExtrudedText>(owned_scene).font == "font.ttf" &&
-                geometry<ExtrudedText>(owned_scene).value == "BO S" &&
+                objects<ExtrudedText>(owned_scene).size() == 1 && geometry_of<ExtrudedText>(owned_scene).font == "font.ttf" &&
+                geometry_of<ExtrudedText>(owned_scene).value == "BO S" &&
                 std::holds_alternative<Metal>(objects<ExtrudedText>(owned_scene)[0]->material),
                 "copied and moved AST builds after caller input and original AST are destroyed");
         const auto invalid_ast = detached_ast(
@@ -172,7 +176,7 @@ csg {
         const auto csg_scene = build_scene_description(detached_ast(text + csg, "csg.hipscene"));
         require(objects<Csg>(csg_scene).size() == 1 &&
                 std::holds_alternative<Metal>(objects<Csg>(csg_scene)[0]->material) &&
-                leaves(geometry<Csg>(csg_scene).root) == 3, "nested CSG AST survives source ownership changes");
+                leaves(geometry_of<Csg>(csg_scene).root) == 3, "nested CSG AST survives source ownership changes");
         rejects(text + replace(csg, "material blue", "material missing"), "unknown material");
         rejects_build(text + replace(csg, "minor_radius 0.2", "minor_radius 1.2"), "minor_radius");
         rejects_build(text + replace(csg, "radius 0.7", "radius 0"), "positive");
@@ -192,22 +196,22 @@ csg {
         const auto loaded_text = load_scene_description(text_fixture.string());
         const auto csg_text_fixture = text_fixture.parent_path() / "csg_text.hipscene";
         const auto csg_text = load_scene_description(csg_text_fixture.string());
-        const auto& text_root = geometry<Csg>(csg_text, 1).root;
+        const auto& text_root = geometry_of<Csg>(csg_text, 1).root;
         const auto& first_text = std::get<ExtrudedText>(text_root.children[0].geometry);
         require(objects<Csg>(csg_text).size() == 2 && objects<ExtrudedText>(csg_text).empty() &&
-                first_text.value == "BO" && first_text.font == geometry<ExtrudedText>(loaded_text).font &&
+                first_text.value == "BO" && first_text.font == geometry_of<ExtrudedText>(loaded_text).font &&
                 first_text == std::get<ExtrudedText>(text_root.children[1].geometry),
                 "CSG text paths resolve and identical operands remain equal");
         const auto text_operand = replace(text_object, " material blue", "");
         const std::string text_solid = "\ncsg { material blue " + text_operand + " }\n";
         const auto text_ast = detached_ast(text + text_solid, "text-solid.hipscene");
-        require(std::get<ExtrudedText>(geometry<Csg>(build_scene_description(text_ast)).root.geometry).value == "BO S",
+        require(std::get<ExtrudedText>(geometry_of<Csg>(build_scene_description(text_ast)).root.geometry).value == "BO S",
                 "CSG text AST owns its strings after copy and move");
         rejects_build(text + replace(text_solid, "depth 0.2", "depth 0"), "positive");
         rejects_build(text + replace(text_solid, "font.ttf", ""), "must not be empty");
         rejects(text + replace(text_solid, "position [-1, 0.2, 0]", "position [-1, 0.2, 0] material blue"),
                 "expected '}'");
-        require(geometry<ExtrudedText>(loaded_text).font ==
+        require(geometry_of<ExtrudedText>(loaded_text).font ==
                     (text_fixture.parent_path() / "fonts" / "example.ttf").lexically_normal().string(),
                 "font paths resolve relative to scene");
         rejects_build(text + replace(text_object, "depth 0.2", "depth 0"), "positive");
@@ -249,9 +253,9 @@ csg {
         rejects(text.substr(0, text.rfind('}')), "expected '}'");
         auto overridden = classic;
         override_scene_mesh(overridden, "replacement.ply", MeshUp::z);
-        require(geometry<Mesh>(overridden, 1).file == "replacement.ply" &&
-                geometry<Mesh>(overridden, 1).position.y == 0.02f &&
-                geometry<Mesh>(overridden, 1).kind == SceneMeshKind::ply, "legacy cat replacement");
+        require(geometry_of<Mesh>(overridden, 1).file == "replacement.ply" &&
+                geometry_of<Mesh>(overridden, 1).position.y == 0.02f &&
+                geometry_of<Mesh>(overridden, 1).kind == SceneMeshKind::ply, "legacy cat replacement");
         Object gold{Sphere{{1, 2, 3}, 0.5f}, Metal{ConstantColor{{0.8f, 0.6f, 0.1f}}, 0.15f}};
         auto matte = gold;
         matte.material = Diffuse{Wood{}};

@@ -396,16 +396,42 @@ Object gold{
 ```
 
 Sphere and torus are value types with bounds and device intersection methods,
-not a virtual class hierarchy. Their shared declarations are in
-[geometry/analytic.h](src/geometry/analytic.h), with intersection implementations
-in [geometry/sphere.h](src/geometry/sphere.h) and
-[geometry/torus.h](src/geometry/torus.h).
+not a virtual class hierarchy. Each type lives in its own
+[component](src/components), including [Scene](src/components/scene) and
+[Object](src/components/object):
+
+- `description.h`: owned AST data, with double-valued numeric parameters.
+- `parser.h`: Boost.Parser rules and definitions, in the component's
+  `parsing` namespace. [parser.cpp](src/parsing/parser.cpp) registers all rules
+  with one `BOOST_PARSER_DEFINE_RULES`; rule IDs share its namespace for ADL.
+- `builder.h`: semantic validation and conversion to the component model.
+- `model.h`: renderer values and device method declarations. Larger algorithms
+  live alongside them, such as `intersection.h`, `scattering.h` or `outline.cpp`.
+- `gpu_model.h` / `preparation.h`, where needed: buffer-facing payloads and
+  lowering of resource-owning values.
+
+For example, [sphere](src/components/sphere) owns its description, both ordinary
+and CSG grammar rules, validated builder, bounds and analytic intersections.
+`hip_demo::sphere::Model` is also available as `hip_demo::Sphere`; corresponding
+aliases keep the existing C++ object-construction API usable.
+Scene settings compose camera and room models and a typed light variant:
+use `scene.settings.camera.position` and `scene.settings.room.textures`.
+Scene and Object builders compose their child components rather than repeating
+their validation. Components without scene-file syntax need no parser rule.
 
 The pipeline is syntax AST -> validated CPU objects -> prepared GPU data.
-[prepare_scene](src/building/geometry.h) lowers variants to explicitly tagged,
+[prepare_scene](src/components/scene/preparation.h) lowers variants to explicitly tagged,
 trivially copyable [GPU payloads](src/gpu/types.h), compiles CSG trees into
-Boolean jump programs, and prepares mesh/font geometry. No `std::variant`
-dispatch or virtual calls are needed on the GPU. Intersection code determines
+Boolean jump programs, and prepares mesh/font geometry. The GPU wire layout
+remains unchanged; resource-owning CPU variants are not copied to the device.
+[shader::visit](src/shader/visit.h) dispatches the existing GPU shader tag to
+concrete component shader types with `evaluate` and `scatter` methods and
+lighting traits. The integrator does not branch on individual shader IDs.
+This is a device-compatible tagged visitor, not device `std::visit`: the current
+Windows HIP/MSVC STL implementation reaches a host-only exception helper.
+Invalid shader tags trap instead of silently selecting a default shader.
+The visitor improves organization, not inherently dispatch cost or divergence.
+Intersection code determines
 geometry; traversal attaches the material and evaluates its textures before
 shader/BSDF evaluation. Geometric normals remain separate from texture-modified
 shading normals.

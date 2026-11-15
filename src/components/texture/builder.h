@@ -1,0 +1,47 @@
+#pragma once
+
+#include "components/texture/description.h"
+#include "components/texture/model.h"
+#include "components/texture/gpu_model.h"
+#include "components/value/builder.h"
+#include "components/color/builder.h"
+#include "components/tiles/builder.h"
+#include "components/wood/builder.h"
+#include "components/marble/builder.h"
+#include "components/mandelbrot/builder.h"
+#include "components/julia/builder.h"
+#include <type_traits>
+
+namespace hip_demo::texture {
+inline Model build(const Description& value, scene_ast::Position where, const SceneValues& values) {
+    return std::visit([&](const auto& source) -> Model {
+        using T = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<T, color::Description>) return color::build(source, where, values);
+        else if constexpr (std::is_same_v<T, tiles::Description>) return tiles::build(source);
+        else if constexpr (std::is_same_v<T, wood::Description>) return wood::build(source);
+        else if constexpr (std::is_same_v<T, marble::Description>) return marble::build(source);
+        else if constexpr (std::is_same_v<T, mandelbrot::Description>) return mandelbrot::build(source);
+        else {
+            static_assert(std::is_same_v<T, julia::Description>);
+            return julia::build(source);
+        }
+    }, value);
+}
+}
+namespace hip_demo {
+inline GpuTexture prepare_texture(const Texture& texture) {
+    return std::visit([](const auto& value) -> GpuTexture {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ConstantColor>) return {value.color, TextureKind::color};
+        else if constexpr (std::is_same_v<T, Tiles>) return {{}, TextureKind::tiles};
+        else if constexpr (std::is_same_v<T, Wood>) return {{}, TextureKind::wood};
+        else if constexpr (std::is_same_v<T, Marble>) return {{}, TextureKind::marble};
+        else if constexpr (std::is_same_v<T, Mandelbrot>) return {{}, TextureKind::mandelbrot};
+        else {
+            static_assert(std::is_same_v<T, Julia>);
+            return {{}, TextureKind::julia};
+        }
+    }, texture);
+}
+
+}

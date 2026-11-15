@@ -2,8 +2,8 @@
 
 #include "gpu/runtime.h"
 #include "gpu/scene_view.h"
-#include "building/geometry.h"
-#include "building/scene_description.h"
+#include "components/scene/preparation.h"
+#include "components/scene/builder.h"
 
 namespace hip_demo {
 

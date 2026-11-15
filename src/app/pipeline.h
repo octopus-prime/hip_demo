@@ -1,7 +1,7 @@
 #pragma once
 
 #include "app/options.h"
-#include "building/geometry.h"
+#include "components/scene/preparation.h"
 #include "gpu/device.h"
 #include "gpu/download.h"
 #include "gpu/scene.h"

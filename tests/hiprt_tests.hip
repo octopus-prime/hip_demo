@@ -289,7 +289,7 @@ __global__ void check_cornell_scene(TraceScene scene, unsigned int* failures) {
     }
     float cosine_sum = 0.0f;
     for (int i = 0; i < 2048; ++i) {
-        const float3 direction = sample_phong_lobe({0.0f, 1.0f, 0.0f}, random);
+        const float3 direction = phong::sample_phong_lobe({0.0f, 1.0f, 0.0f}, random);
         if (!(direction.y >= 0.0f) || fabsf(dot(direction, direction) - 1.0f) > 0.0001f) {
             failed |= 16;
         }
@@ -427,7 +427,55 @@ void check_adaptive_render(TraceScene scene) {
     }
 }
 
+__global__ void check_shader_visitor(unsigned int* failure) {
+    unsigned int failed = 0;
+    const ShaderKind kinds[]{ShaderKind::diffuse, ShaderKind::phong, ShaderKind::phong,
+                             ShaderKind::metal, ShaderKind::glass, ShaderKind::emissive};
+    for (unsigned int i = 0; i < 6; ++i) {
+        Hit hit{};
+        hit.normal = {0, 1, 0};
+        hit.front_face = true;
+        hit.albedo = {0.8f, 0.4f, 0.2f};
+        hit.roughness = 0.15f;
+        hit.material = kinds[i];
+        Ray actual{{}, normalize({0.3f, -1, 0.2f})}, expected = actual;
+        Random random{i == 2 ? 0x12345678u : 1u}, reference = random;
+        float3 throughput{1, 1, 1}, expected_throughput = throughput;
+        const float3 direction{0, 1, 0};
+        const auto compare = [&] __device__ (auto shader) {
+            const float3 evaluated = shader.evaluate(expected, hit, direction, 1);
+            const float3 visited = evaluate_scattering(actual, hit, direction, 1);
+            const bool expected_scatter = shader.scatter(expected, hit, reference, expected_throughput);
+            const bool actual_scatter = scatter(actual, hit, random, throughput);
+            const float3 direction_delta = expected.direction - actual.direction;
+            const float3 throughput_delta = expected_throughput - throughput;
+            const float3 evaluation_delta = evaluated - visited;
+            return expected_scatter == actual_scatter && random.state == reference.state &&
+                dot(direction_delta, direction_delta) < 1e-12f &&
+                dot(throughput_delta, throughput_delta) < 1e-12f && dot(evaluation_delta, evaluation_delta) < 1e-12f;
+        };
+        bool matches = false;
+        switch (kinds[i]) {
+        case ShaderKind::diffuse: matches = compare(diffuse::Shader{}); break;
+        case ShaderKind::phong: matches = compare(phong::Shader{}); break;
+        case ShaderKind::metal: matches = compare(metal::Shader{}); break;
+        case ShaderKind::glass: matches = compare(glass::Shader{}); break;
+        case ShaderKind::emissive: matches = compare(emissive::Shader{}); break;
+        }
+        if (!matches) failed |= 1u << i;
+    }
+    *failure = failed;
+}
+
 void run_checks(TraceScene scene) {
+    auto visitor_failure = allocate_device<unsigned int>(1, "Allocating shader visitor checks");
+    hipLaunchKernelGGL(check_shader_visitor, dim3(1), dim3(1), 0, 0, visitor_failure.get());
+    check_hip(hipGetLastError(), "Launching shader visitor checks");
+    unsigned int visitor_result = 0;
+    check_hip(hipMemcpy(&visitor_result, visitor_failure.get(), sizeof(visitor_result), hipMemcpyDeviceToHost),
+              "Reading shader visitor checks");
+    if (visitor_result != 0)
+        throw std::runtime_error("Shader visitor checks failed (flags " + std::to_string(visitor_result) + ")");
     auto adaptive_failure = allocate_device<unsigned int>(1, "Allocating adaptive sampling checks");
     hipLaunchKernelGGL(check_adaptive_sampling, dim3(1), dim3(1), 0, 0, adaptive_failure.get());
     check_hip(hipGetLastError(), "Launching adaptive sampling checks");

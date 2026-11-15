@@ -1,10 +1,10 @@
 #pragma once
 
-#include "texture/tiles.h"
-#include "texture/wood.h"
-#include "texture/marble.h"
-#include "texture/mandelbrot.h"
-#include "texture/julia.h"
+#include "components/tiles/evaluation.h"
+#include "components/wood/evaluation.h"
+#include "components/marble/evaluation.h"
+#include "components/mandelbrot/evaluation.h"
+#include "components/julia/evaluation.h"
 #include "scene/defaults.h"
 
 namespace hip_demo {

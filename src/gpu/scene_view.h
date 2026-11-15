@@ -4,7 +4,7 @@
 #include <hiprt/hiprt.h>
 #include <hiprt/hiprt_device.h>
 #include "scene/types.h"
-#include "gpu/prepared_scene.h"
+#include "components/scene/prepared.h"
 
 namespace hip_demo {
 

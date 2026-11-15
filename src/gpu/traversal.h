@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gpu/scene_view.h"
-#include "geometry/room.h"
-#include "shader/room.h"
+#include "components/room/intersection.h"
+#include "components/room/shading.h"
 
 namespace hip_demo {
 

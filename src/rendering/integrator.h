@@ -2,8 +2,8 @@
 
 #include "gpu/traversal.h"
 #include "shader/dispatch.h"
-#include "light/rectangle.h"
-#include "light/torus.h"
+#include "components/rectangle_light/sampling.h"
+#include "components/torus_light/sampling.h"
 
 namespace hip_demo {
 
@@ -18,17 +18,17 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
             break;
         }
         const float3 geometric_normal = hit.geometric_normal;
+        const auto traits = shader::visit([] __device__ (auto value) { return value.traits; }, hit.material);
 
-        if (bounce == 0 && specular_primary &&
-            (hit.material == ShaderKind::glass || hit.material == ShaderKind::metal || hit.material == ShaderKind::phong)) {
+        if (bounce == 0 && specular_primary && traits.specular_primary) {
             *specular_primary = true;
         }
-        if (hit.material == ShaderKind::emissive) {
+        if (traits.emissive) {
             if (include_emission && hit.front_face) {
                 radiance = radiance + throughput * vector3(scene.settings->light.radiance);
             }
             break;
-        } else if (hit.material == ShaderKind::metal || hit.material == ShaderKind::glass) {
+        } else if (traits.delta) {
             include_emission = true;
         } else {
             LightSample light{};
@@ -61,8 +61,7 @@ __device__ inline float3 trace(Ray ray, Random& random, TraceScene scene, bool* 
         if (!scatter(ray, hit, random, throughput)) {
             break;
         }
-        if (hit.material != ShaderKind::metal && hit.material != ShaderKind::glass &&
-            hit.has_normal_map && dot(ray.direction, geometric_normal) <= 0.0f) {
+        if (!traits.delta && hit.has_normal_map && dot(ray.direction, geometric_normal) <= 0.0f) {
             break;
         }
         ray.origin = hit.point + geometric_normal * (dot(ray.direction, geometric_normal) > 0.0f ? 0.002f : -0.002f);

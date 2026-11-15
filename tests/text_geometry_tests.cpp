@@ -1,5 +1,5 @@
-#include "geometry/text.h"
-#include "geometry/text_solid.h"
+#include "components/text/outline.h"
+#include "components/text/solid.h"
 #include "polynomial_cases.h"
 
 #include <algorithm>

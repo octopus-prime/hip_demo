@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/defaults.h"
-#include "geometry/primitive.h"
+#include "components/object/intersection.h"
 
 namespace hip_demo {
 
