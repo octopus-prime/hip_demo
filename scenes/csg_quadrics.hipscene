@@ -1,0 +1,45 @@
+hipscene 1
+
+camera {
+    position [0, 4.2, 13]
+    target [0, 1.3, 0]
+    half_view_height 0.3
+}
+room {
+    size [12, 6, 14]
+    floor color [0.65, 0.65, 0.65]
+    ceiling color [0.55, 0.55, 0.55]
+    back color [0.3, 0.34, 0.42]
+    left color [0.5, 0.5, 0.5]
+    right color [0.5, 0.5, 0.5]
+}
+material lamp = emissive [14, 12, 10]
+material gold = metal [0.92, 0.62, 0.25] roughness 0.16
+material blue = phong [0.12, 0.38, 0.82]
+material green = phong [0.12, 0.65, 0.42]
+rectangle { center [0, 5.7, 0] width 8 depth 3 material lamp }
+
+csg {
+    material gold
+    difference {
+        ellipsoid { center [-3.4, 1.35, 0] radii [1.2, 1.35, 0.95] }
+        cylinder { center [-3.4, 1.35, 0] radius 0.38 height 3.2 }
+    }
+}
+csg {
+    material blue
+    difference {
+        union {
+            cylinder { center [0, 1.1, 0] radius 0.8 height 2.2 }
+            cone { center [0, 2.4, 0] radius 1 height 1.4 }
+        }
+        sphere { center [0.3, 1.25, 0.85] radius 0.62 }
+    }
+}
+csg {
+    material green
+    difference {
+        hyperboloid { center [3.4, 1.2, 0] radius 0.7 axial_radius 1 height 2.4 }
+        paraboloid { center [3.4, 1.45, 0] radius 0.95 height 2.4 }
+    }
+}

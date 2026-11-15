@@ -5,8 +5,10 @@
 #include "reference_scene.h"
 #include "analytic_intersection_tests.h"
 #include "csg_tests.h"
+#include "csg_quadric_tests.h"
 #include "csg_text_tests.h"
 #include "emission_tests.h"
+#include "quadric_tests.h"
 
 using namespace hip_demo;
 
@@ -867,7 +869,7 @@ __global__ void check_object_materials(TraceScene scene, unsigned int* failure) 
     for (unsigned int i = 0; i < 3; ++i) {
         const Ray ray{{static_cast<float>(i * 3), 0, 2}, {0, 0, -1}};
         Hit hit{}, geometry_hit{};
-        const auto& sphere = scene.primitives[i].geometry.sphere;
+        const auto& sphere = scene.primitives[i].geometry.quadric;
         if (!sphere.intersect(ray, 0.001f, 4, geometry_hit) ||
             !hit_objects(ray, hit, scene) || hit.object_id != i ||
             fabsf(hit.distance - 1.5f) > 0.00001f ||
@@ -1125,6 +1127,8 @@ int main(int argc, char** argv) {
             run_csg_text_tests(device.id);
             check_material_scene(device.id);
             run_emission_tests(device.id);
+            run_quadric_tests(device.id);
+            run_csg_quadric_tests(device.id);
         }
         if (text_mode) {
             check_text_scene(device.id, argv[2]);

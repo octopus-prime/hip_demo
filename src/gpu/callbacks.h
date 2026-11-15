@@ -32,8 +32,7 @@ __device__ bool intersectFunc(std::uint32_t geom_type, std::uint32_t ray_type, c
     }
     hip_demo::Hit hit{};
     if (result.primID >= data->count ||
-        !hip_demo::hit_described_primitive(scene_ray, data->objects[result.primID], ray.maxT, hit) ||
-        hit.distance < ray.minT) {
+        !hip_demo::hit_described_primitive(scene_ray, data->objects[result.primID], ray.minT, ray.maxT, hit)) {
         return false;
     }
     result.t = hit.distance;

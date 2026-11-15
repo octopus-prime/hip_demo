@@ -7,9 +7,7 @@ namespace hip_demo {
 
 __device__ inline bool csg_same_shape(const GpuGeometry& a, const GpuGeometry& b) {
     if (a.kind != b.kind) return false;
-    if (a.kind == GeometryKind::sphere)
-        return a.sphere.center.x == b.sphere.center.x && a.sphere.center.y == b.sphere.center.y &&
-            a.sphere.center.z == b.sphere.center.z && a.sphere.radius == b.sphere.radius;
+    if (a.kind == GeometryKind::quadric) return a.quadric.same_shape(b.quadric);
     return a.torus.center.x == b.torus.center.x && a.torus.center.y == b.torus.center.y &&
         a.torus.center.z == b.torus.center.z && a.torus.major_radius == b.torus.major_radius &&
         a.torus.minor_radius == b.torus.minor_radius && a.torus.tilt_sine == b.torus.tilt_sine &&
@@ -19,6 +17,64 @@ __device__ inline bool csg_same_shape(const GpuGeometry& a, const GpuGeometry& b
 __device__ inline bool csg_same_shape(const GpuCsgLeaf& a, const GpuCsgLeaf& b) {
     if (a.text || b.text) return a.text && b.text && a.text_index == b.text_index;
     return csg_same_shape(a.shape, b.shape);
+}
+
+struct CsgQuadricBoundary {
+    float distance;
+    float3 normal;
+};
+
+struct CsgQuadricBoundaries {
+    CsgQuadricBoundary values[4];
+    int count = 0;
+
+    __device__ void add(float distance, float3 normal) {
+        if (!isfinite(distance)) return;
+        int index = count++;
+        while (index > 0 && values[index - 1].distance > distance) {
+            values[index] = values[index - 1];
+            --index;
+        }
+        values[index] = {distance, normal};
+    }
+};
+
+__device__ inline CsgQuadricBoundaries csg_quadric_boundaries(const Ray& ray, const GpuQuadric& shape) {
+    CsgQuadricBoundaries boundaries;
+    const auto offset = ray.origin - vector3(shape.center);
+    if (shape.capped && ray.direction.y == 0 && fabsf(offset.y) >= shape.scale.y) return boundaries;
+    const auto roots = shape.intersections(ray);
+    for (int i = 0; i < roots.roots.count; ++i) {
+        const float t = roots.distance(i);
+        const float y = fmaf(t, ray.direction.y, offset.y) / shape.scale.y;
+        if (shape.capped && fabsf(y) > 1 + 4 * 0x1p-23f) continue;
+        boundaries.add(t, shape.normal_at(ray, t));
+    }
+    if (!shape.capped || ray.direction.y == 0) return boundaries;
+    for (const float y : {-1.0f, 1.0f}) {
+        const float t = (y * shape.scale.y - offset.y) / ray.direction.y;
+        if (!isfinite(t)) continue;
+        const float3 p{fmaf(t, ray.direction.x, offset.x) / shape.scale.x, y,
+                       fmaf(t, ray.direction.z, offset.z) / shape.scale.z};
+        const float tolerance = shape.evaluate({0, y, 0}) == 0 ? 0 : 4 * 0x1p-23f;
+        if (shape.evaluate(p) > tolerance) continue;
+        const float3 normal{0, y, 0};
+        bool crossing = true;
+        const float epsilon = 2 * 0x1p-23f * fmaxf(1, fabsf(t));
+        // A cap and side meeting at a rim are one boundary, not two parity toggles.
+        for (int i = 0; i < boundaries.count;) {
+            if (fabsf(boundaries.values[i].distance - t) > epsilon) {
+                ++i;
+                continue;
+            }
+            const float side_direction = dot(boundaries.values[i].normal, ray.direction);
+            if (side_direction * dot(normal, ray.direction) < 0) crossing = false;
+            for (int j = i + 1; j < boundaries.count; ++j) boundaries.values[j - 1] = boundaries.values[j];
+            --boundaries.count;
+        }
+        if (crossing) boundaries.add(t, normal);
+    }
+    return boundaries;
 }
 
 struct CsgEvent {
@@ -191,13 +247,13 @@ __device__ inline bool csg_cache_build(CsgEventCache& cache, const Ray& ray, con
             for (std::uint32_t glyph = 0; glyph < leaf.glyph_count; ++glyph)
                 if (!csg_cache_glyph(cache, ray, text.glyphs[leaf.first_glyph + glyph], text.curves,
                                      i, leaf.first_glyph + glyph, minimum, maximum)) return false;
-        } else if (leaf.shape.kind == GeometryKind::sphere) {
-            const auto& sphere = leaf.shape.sphere;
-            const auto roots = sphere.intersections(ray);
-            for (int root = 0; root < roots.count; ++root) {
-                const float t = roots.values[root];
-                const bool candidate = t >= minimum && t < maximum;
-                const float3 normal = candidate ? sphere.normal_at(ray, t) : float3{};
+        } else if (leaf.shape.kind == GeometryKind::quadric) {
+            const auto& quadric = leaf.shape.quadric;
+            const auto boundaries = csg_quadric_boundaries(ray, quadric);
+            for (int root = 0; root < boundaries.count; ++root) {
+                const float t = boundaries.values[root].distance;
+                const float3 normal = boundaries.values[root].normal;
+                const bool candidate = t >= minimum && t < maximum && dot(normal, normal) > 0;
                 // Do not merge primitive roots: even multiplicities cancel occupancy.
                 if (!cache.add({t, normal, i, CsgEventCache::primitive, 0, 0, false, candidate, false},
                                 maximum, cache.event_count)) return false;

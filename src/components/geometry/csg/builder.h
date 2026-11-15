@@ -3,6 +3,11 @@
 #include "components/geometry/csg/description.h"
 #include "components/geometry/csg/model.h"
 #include "components/geometry/sphere/builder.h"
+#include "components/geometry/ellipsoid/builder.h"
+#include "components/geometry/cylinder/builder.h"
+#include "components/geometry/cone/builder.h"
+#include "components/geometry/paraboloid/builder.h"
+#include "components/geometry/hyperboloid/builder.h"
 #include "components/geometry/torus/builder.h"
 #include "components/geometry/text/builder.h"
 #include <type_traits>
@@ -16,6 +21,11 @@ inline Model build(const Description& source, const SceneValues& values) {
             result.geometry = std::visit([&](const auto& shape) -> decltype(result.geometry) {
                 using T = std::decay_t<decltype(shape)>;
                 if constexpr (std::is_same_v<T, scene_ast::Sphere>) return hip_demo::geometry::sphere::build(shape, values);
+                else if constexpr (std::is_same_v<T, scene_ast::Ellipsoid>) return hip_demo::geometry::ellipsoid::build(shape, values);
+                else if constexpr (std::is_same_v<T, scene_ast::Cylinder>) return hip_demo::geometry::cylinder::build(shape, values);
+                else if constexpr (std::is_same_v<T, scene_ast::Cone>) return hip_demo::geometry::cone::build(shape, values);
+                else if constexpr (std::is_same_v<T, scene_ast::Paraboloid>) return hip_demo::geometry::paraboloid::build(shape, values);
+                else if constexpr (std::is_same_v<T, scene_ast::Hyperboloid>) return hip_demo::geometry::hyperboloid::build(shape, values);
                 else if constexpr (std::is_same_v<T, scene_ast::Torus>) return hip_demo::geometry::torus::build(shape, values);
                 else {
                     static_assert(std::is_same_v<T, scene_ast::Text>);

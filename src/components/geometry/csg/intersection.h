@@ -6,7 +6,12 @@ namespace hip_demo {
 
 __device__ inline PolynomialRoots csg_leaf_roots(const Ray& ray, const GpuGeometry& shape,
                                                 float minimum, float maximum) {
-    if (shape.kind == GeometryKind::sphere) return shape.sphere.intersections(ray);
+    if (shape.kind == GeometryKind::quadric) {
+        const auto quadric = csg_quadric_boundaries(ray, shape.quadric);
+        PolynomialRoots roots;
+        for (int i = 0; i < quadric.count; ++i) roots.add(quadric.values[i].distance);
+        return roots;
+    }
     const auto torus = shape.torus.intersections(ray, minimum, maximum);
     PolynomialRoots roots;
     for (int i = 0; i < torus.roots.count; ++i) roots.add(torus.distance(i));
@@ -15,7 +20,12 @@ __device__ inline PolynomialRoots csg_leaf_roots(const Ray& ray, const GpuGeomet
 
 __device__ inline float3 csg_leaf_normal(const Ray& ray, const GpuGeometry& shape, float distance,
                                         float minimum, float maximum) {
-    if (shape.kind == GeometryKind::sphere) return shape.sphere.normal_at(ray, distance);
+    if (shape.kind == GeometryKind::quadric) {
+        const auto boundaries = csg_quadric_boundaries(ray, shape.quadric);
+        for (int i = 0; i < boundaries.count; ++i)
+            if (boundaries.values[i].distance == distance) return boundaries.values[i].normal;
+        return {};
+    }
     const auto torus = shape.torus.intersections(ray, minimum, maximum);
     int closest = 0;
     for (int i = 1; i < torus.roots.count; ++i)
@@ -68,8 +78,9 @@ __device__ inline bool csg_leaf_boundary(const Ray& ray, const GpuCsgLeaf& leaf,
     for (int i = 0; i < roots.count; ++i) {
         const float distance = roots.values[i];
         if (distance < minimum || distance >= maximum) continue;
-        hit.distance = distance;
         const auto normal = csg_leaf_normal(ray, leaf.shape, distance, minimum, maximum);
+        if (dot(normal, normal) == 0) continue;
+        hit.distance = distance;
         hit.normal = {normal.x, normal.y, normal.z};
         return true;
     }

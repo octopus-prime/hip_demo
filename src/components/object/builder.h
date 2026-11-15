@@ -8,6 +8,11 @@
 #include "components/geometry/csg/builder.h"
 #include "components/geometry/mesh/builder.h"
 #include "components/geometry/rectangle/builder.h"
+#include "components/geometry/ellipsoid/builder.h"
+#include "components/geometry/cylinder/builder.h"
+#include "components/geometry/cone/builder.h"
+#include "components/geometry/paraboloid/builder.h"
+#include "components/geometry/hyperboloid/builder.h"
 #include <map>
 #include <type_traits>
 #include <utility>
@@ -35,6 +40,16 @@ inline Model build(const Description& source, const std::map<std::string, Materi
             return {hip_demo::geometry::mesh::build(value, values), material_reference(value)};
         else if constexpr (std::is_same_v<T, scene_ast::Rectangle>)
             return {hip_demo::geometry::rectangle::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Ellipsoid>)
+            return {hip_demo::geometry::ellipsoid::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Cylinder>)
+            return {hip_demo::geometry::cylinder::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Cone>)
+            return {hip_demo::geometry::cone::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Paraboloid>)
+            return {hip_demo::geometry::paraboloid::build(value, values), material_reference(value)};
+        else if constexpr (std::is_same_v<T, scene_ast::Hyperboloid>)
+            return {hip_demo::geometry::hyperboloid::build(value, values), material_reference(value)};
         else {
             static_assert(std::is_same_v<T, SceneMeshKind>);
             Mesh geometry;

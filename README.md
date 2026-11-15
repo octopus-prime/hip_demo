@@ -159,6 +159,8 @@ not a guarantee of matching fixed-sample quality.
 | [CSG text](scenes/csg_text.hipscene) | `--scene .\scenes\csg_text.hipscene` | A font. |
 | [Mesh light](scenes/mesh_light.hipscene) | `--scene .\scenes\mesh_light.hipscene` | None; original panel mesh included. |
 | [Dragon light](scenes/dragon_light.hipscene) | `--scene .\scenes\dragon_light.hipscene` | Same dragon PLY mesh as Detail. |
+| [Quadrics](scenes/quadrics.hipscene) | `--scene .\scenes\quadrics.hipscene` | None. |
+| [CSG quadrics](scenes/csg_quadrics.hipscene) | `--scene .\scenes\csg_quadrics.hipscene` | None. |
 
 Classic contains colored walls, a ceiling light, spheres, tilted tori, a faceted
 crystal and a low-poly cat. Detail contains a luminous torus, mirror and glass
@@ -219,6 +221,49 @@ Scenes control camera position/target/view size, room dimensions and surfaces,
 named diffuse/metal/glass/Phong/emissive materials, and any
 number of spheres, tori, rectangles, CSG solids, PLY meshes and text objects. `cat` and `crystal` insert
 the supplied procedural models.
+Ellipsoids, cylinders, cones, paraboloids and hyperboloids are also supported as
+ordinary objects.
+
+### Quadrics
+
+The [quadrics demo](scenes/quadrics.hipscene) shows, left to right: a sphere,
+ellipsoid, cylinder, cone, paraboloid and hyperboloid. All six have distinct CPU
+components and lower to **one GPU Quadric model**, without triangulation.
+
+```text
+sphere { center [-5, 1, 0] radius 1 material gold }
+ellipsoid { center [-3, 1, 0] radii [0.7, 1, 0.5] material blue }
+cylinder { center [-1, 1, 0] radius 0.65 height 2 material green }
+cone { center [1, 1, 0] radius 0.75 height 2 material copper }
+paraboloid { center [3, 1, 0] radius 0.8 height 2 material purple }
+hyperboloid { center [5, 1, 0] radius 0.4 axial_radius 0.75 height 2 material cyan }
+```
+
+Define the referenced materials before these objects. All radii and heights must
+be finite and positive. Ellipsoid `radii` are the X/Y/Z semiaxes. The other new
+forms are aligned with Y; `center` is the midpoint of their height interval.
+Their lower and upper limits are `center.y - height/2` and `center.y + height/2`:
+
+- **Cylinder:** constant radius, with bottom and top disks.
+- **Cone:** `radius` at the bottom, narrowing to a point at the top; closed base.
+- **Paraboloid:** point at the bottom, widening to `radius` at the closed top.
+  Squared cross-section radius grows linearly with height.
+- **Hyperboloid:** a one-sheet, hourglass-shaped body with both end disks.
+  `radius` is the waist radius; `axial_radius` controls flaring.
+  At height offset `y`, its cross-section radius is
+  `radius * sqrt(1 + (y/axial_radius)^2)`.
+
+The GPU stores a normalized local-space quadratic polynomial, its center/scale
+and height-capping flag. Bounds are finite and enclose the complete capped body;
+they do not substitute for the actual cap intersections. Normals come from the
+polynomial gradient transformed by inverse scale. Rays are recentered within the
+bounds and their parameter is scaled before solving the quadratic equation.
+Unusable FP32 dimensions or collapsed bounds are rejected during GPU preparation.
+At the cone's singular apex, an axial cap hit supplies an axial normal; singular
+side hits without a defined normal are ignored.
+
+All six quadratic shapes can also be CSG operands. Like spheres, the new quadrics
+may use emissive materials but currently have no direct-light surface sampler.
 
 ### Emissive objects and mesh lights
 
@@ -252,7 +297,7 @@ the triangle. Degenerate triangles are skipped; wholly degenerate emissive meshe
 are rejected. PDFs include emitter selection; tilted tori use their geometry's
 transform and nonuniform angular-sampling PDF.
 
-Sphere, text and CSG emission remains visible through camera/BSDF rays, but these
+Quadric, text and CSG emission remains visible through camera/BSDF rays, but these
 geometries do not yet have direct-light samplers and can converge more slowly.
 Direct-light samples and diffuse/Phong BSDF hits on sampled emitters are combined
 with **multiple importance sampling (MIS)** using the power heuristic. Both PDFs
@@ -280,7 +325,8 @@ bidirectional layout are not supported.
 
 ### CSG: union, intersection and difference
 
-A `csg` object combines closed spheres, tori and extruded text without triangulation:
+A `csg` object combines closed quadrics (sphere, ellipsoid, cylinder, cone,
+paraboloid or hyperboloid), tori and extruded text without triangulation:
 
 ```text
 csg {
@@ -304,7 +350,9 @@ Tori require `minor_radius < major_radius`; `tilt_x` is in degrees.
 Set the material once on the `csg` object, not on its leaves. It also covers
 new cut surfaces, whose normals point out of the remaining solid.
 Meshes, rectangles and room surfaces cannot be CSG operands. A CSG object can
-itself use an emissive material.
+itself use an emissive material. The [CSG quadrics demo](scenes/csg_quadrics.hipscene)
+shows nested unions and cutouts with all five new shapes. Quadric caps are part
+of the solid and participate in Boolean cuts just like their curved sides.
 
 Text operands use the same font, value, size, depth and position fields as
 standalone text, but **omit the leaf material**:
@@ -337,7 +385,7 @@ From `build\bin`, start with a small preview:
 ```
 
 HIP RT traverses conservative bounding boxes; custom GPU intersections combine
-analytic, single-precision sphere/torus and text cap/Bezier boundaries. There is no sphere tracing.
+analytic, single-precision quadric side/cap, torus and text cap/Bezier boundaries. There is no sphere tracing.
 Tangencies and zero-volume contacts do not create solid intervals; identical
 subtractions are empty. Nearly coincident boundaries are grouped within
 `2 * float_epsilon * max(1, abs(ray_t))`, so sub-tolerance thin features can
@@ -433,7 +481,8 @@ environment; run `./build/bin/hiprt_demo` instead of the Windows executable.
 The CPU scene uses standard graphics terminology:
 
 - **Object** combines a **Geometry** and a **Material**.
-- **Geometry** is a `std::variant` of sphere, torus, rectangle, mesh, extruded text and CSG.
+- **Geometry** is a `std::variant` of sphere, ellipsoid, cylinder, cone,
+  paraboloid, hyperboloid, torus, rectangle, mesh, extruded text and CSG.
   Geometry contains no material parameters.
 - **Material** is a `std::variant` of diffuse, Phong, metal, glass and emissive
   descriptions. Each alternative supplies parameters for its shader/BSDF code.
@@ -451,13 +500,14 @@ Object gold{
 };
 ```
 
-Sphere and torus are value types with bounds and device intersection methods,
-not a virtual class hierarchy. Each type lives in its own
+Geometry descriptions are value types, not a virtual class hierarchy. The six
+quadratic CPU types lower to a shared GPU Quadric; torus retains its specialized
+GPU model. Each type lives in its own
 [component](src/components), including [Scene](src/components/scene) and
 [Object](src/components/object):
 
 Components are grouped by domain: [geometry](src/components/geometry) contains
-sphere, torus, rectangle, mesh, text and CSG; [material](src/components/material) contains
+the shape components and shared GPU quadric model; [material](src/components/material) contains
 diffuse, Phong, metal, glass and emissive; [texture](src/components/texture)
 contains the texture alternatives; [light](src/components/light) contains
 legacy light-block parsing/building and rectangle/torus/mesh samplers. There is
@@ -478,7 +528,7 @@ Scene, Object, camera, room and shared value components remain at the root.
   lowering of resource-owning values.
 
 For example, [sphere](src/components/geometry/sphere) owns its description, both ordinary
-and CSG grammar rules, validated builder, bounds and analytic intersections.
+and CSG grammar rules, validated CPU builder and GPU-Quadric builder.
 `hip_demo::geometry::sphere::Model` is also available as `hip_demo::Sphere`; corresponding
 aliases keep the existing C++ object-construction API usable.
 Scene settings compose camera and room models and a typed light variant:
@@ -489,8 +539,9 @@ their validation. Components without scene-file syntax need no parser rule.
 The pipeline is syntax AST -> validated CPU objects -> prepared GPU data.
 [prepare_scene](src/components/scene/preparation.h) lowers variants to explicitly tagged,
 trivially copyable [GPU payloads](src/gpu/types.h), compiles CSG trees into
-Boolean jump programs, and prepares mesh/font geometry. The GPU wire layout
-remains unchanged; resource-owning CPU variants are not copied to the device.
+Boolean jump programs, and prepares mesh/font geometry. Resource-owning CPU
+variants are not copied to the device. The GPU geometry payload contains a
+Quadric/Torus tagged union rather than separate GPU sphere and torus models.
 [shader::visit](src/shader/visit.h) dispatches the existing GPU shader tag to
 concrete component shader types with `evaluate` and `scatter` methods and
 lighting traits. The integrator does not branch on individual shader IDs.
@@ -517,7 +568,8 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 Tests cover CLI/config precedence and round-trips, scene loading, meshes, text,
-materials, rendering progress and PNG/BMP output. GPU tests require a compatible
+materials, quadric sides/caps/apices/normals/intervals, rendering progress and
+PNG/BMP output. GPU tests require a compatible
 GPU. Set `HIP_DEMO_TEST_FONT` to a scalable font if Arial or DejaVu Sans is absent.
 
 ## Distribution and licenses

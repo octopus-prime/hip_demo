@@ -288,6 +288,7 @@ add_custom_command(TARGET hiprt_runtime POST_BUILD
         "${CMAKE_CURRENT_BINARY_DIR}/bin/BOOST-PROGRAM-OPTIONS-LICENSE.txt"
     VERBATIM)
 if(MSVC)
+    target_compile_options(scene_description PRIVATE /bigobj)
     set_property(TARGET rply ply_mesh scene_description text_geometry app_support png_static zlibstatic boost_program_options
         PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 endif()

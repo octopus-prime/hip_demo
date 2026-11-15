@@ -1,6 +1,7 @@
 #pragma once
 
 #include "components/scene/prepared.h"
+#include "components/geometry/builder.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -33,7 +34,7 @@ inline void append_csg(PreparedScene& scene, const Csg& source, GpuMaterial mate
                 result.text_index = static_cast<std::uint32_t>(same - texts.begin());
                 if (same == texts.end()) texts.push_back(shape);
             } else {
-                result.shape = GpuGeometry{shape};
+                result.shape = prepare_geometry(shape);
             }
             return result;
         }, node.geometry);

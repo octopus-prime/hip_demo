@@ -32,14 +32,17 @@ struct SceneErrors {
     }
 };
 
+// Boost.Parser registers at most 52 rules at once; simple alternatives are inlined.
 BOOST_PARSER_DEFINE_RULES(
     position_p, identifier_p, string_p, scalar_p, vector2_p, vector_p,
     camera_p, surface_p, wood_p, marble_p, tiles_p, mandelbrot_p, julia_p,
     floor_p, ceiling_p, back_p, left_p, right_p, room_p,
     diffuse_p, phong_p, metal_p, glass_p, emissive_p, shader_p, material_p,
-    rectangle_light_p, torus_light_p, light_p, sphere_p, torus_p, rectangle_p,
-    csg_sphere_p, csg_torus_p, csg_text_p, csg_branch_p, csg_node_p, csg_p,
-    mesh_up_p, mesh_p, text_p, builtin_p, object_p, scene_p);
+    rectangle_light_p, torus_light_p, sphere_p, torus_p, rectangle_p,
+    ellipsoid_p, cylinder_p, cone_p, paraboloid_p, hyperboloid_p,
+    csg_sphere_p, csg_ellipsoid_p, csg_cylinder_p, csg_cone_p, csg_paraboloid_p, csg_hyperboloid_p,
+    csg_torus_p, csg_text_p, csg_branch_p, csg_node_p, csg_p,
+    mesh_up_p, mesh_p, text_p, object_p, scene_p);
 
 }
 
@@ -60,10 +63,20 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
         result.operation = node.operation;
         if (node.children.empty()) {
             result.shape = std::visit([&](const auto& shape)
-                -> std::variant<scene_ast::Sphere, scene_ast::Torus, scene_ast::Text> {
+                -> decltype(result.shape) {
                 using T = std::decay_t<decltype(shape)>;
                 if constexpr (std::is_same_v<T, Sphere>)
                     return scene_ast::Sphere{offset(shape.where), shape.center, shape.radius, {}};
+                else if constexpr (std::is_same_v<T, Ellipsoid>)
+                    return scene_ast::Ellipsoid{offset(shape.where), shape.center, shape.radii, {}};
+                else if constexpr (std::is_same_v<T, Cylinder>)
+                    return scene_ast::Cylinder{offset(shape.where), shape.center, shape.radius, shape.height, {}};
+                else if constexpr (std::is_same_v<T, Cone>)
+                    return scene_ast::Cone{offset(shape.where), shape.center, shape.radius, shape.height, {}};
+                else if constexpr (std::is_same_v<T, Paraboloid>)
+                    return scene_ast::Paraboloid{offset(shape.where), shape.center, shape.radius, shape.height, {}};
+                else if constexpr (std::is_same_v<T, Hyperboloid>)
+                    return scene_ast::Hyperboloid{offset(shape.where), shape.center, shape.radius, shape.axial_radius, shape.height, {}};
                 else if constexpr (std::is_same_v<T, Torus>)
                     return scene_ast::Torus{offset(shape.where), shape.center, shape.major_radius,
                         shape.minor_radius, shape.tilt_x, {}};
@@ -108,6 +121,20 @@ scene_ast::Scene parse_scene_ast(std::string_view text, const std::string& sourc
             } else if constexpr (std::is_same_v<T, hip_demo::parsing::Rectangle>) {
                 return scene_ast::Rectangle{offset(value.where), value.center, value.width, value.depth,
                                              std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, hip_demo::parsing::Ellipsoid>) {
+                return scene_ast::Ellipsoid{offset(value.where), value.center, value.radii, std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, hip_demo::parsing::Cylinder>) {
+                return scene_ast::Cylinder{offset(value.where), value.center, value.radius, value.height,
+                                           std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, hip_demo::parsing::Cone>) {
+                return scene_ast::Cone{offset(value.where), value.center, value.radius, value.height,
+                                       std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, hip_demo::parsing::Paraboloid>) {
+                return scene_ast::Paraboloid{offset(value.where), value.center, value.radius, value.height,
+                                            std::move(value.material)};
+            } else if constexpr (std::is_same_v<T, hip_demo::parsing::Hyperboloid>) {
+                return scene_ast::Hyperboloid{offset(value.where), value.center, value.radius, value.axial_radius,
+                                             value.height, std::move(value.material)};
             } else if constexpr (std::is_same_v<T, Text>) {
                 return scene_ast::Text{offset(value.where), std::move(value.font), std::move(value.value),
                                         value.size, value.depth, value.position, std::move(value.material)};

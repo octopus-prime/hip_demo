@@ -1,6 +1,7 @@
 #include "components/scene/builder.h"
 #include "parsing/parser.h"
 #include "components/material/builder.h"
+#include "components/geometry/builder.h"
 
 #include <cmath>
 #include <filesystem>
@@ -106,6 +107,73 @@ int main(int argc, char** argv) {
                 std::filesystem::exists(geometry_of<Mesh>(scene).file), "mesh paths resolve relative to scene");
         std::ifstream file(argv[1]);
         const std::string text{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        const std::string quadrics = R"(
+ellipsoid { center [0, 2, 0] radii [0.75, 1.5, 0.5] material red }
+cylinder { center [4, 2, 0] radius 1 height 2 material red }
+cone { center [8, 2, 0] radius 1 height 2 material red }
+paraboloid { center [12, 2, 0] radius 1 height 2 material red }
+hyperboloid { center [16, 2, 0] radius 0.6 axial_radius 1 height 2 material red }
+)";
+        const auto quadric_ast = detached_ast(text + quadrics, "quadrics.hipscene");
+        const auto quadric_scene = build_scene_description(quadric_ast);
+        require(geometry_of<Ellipsoid>(quadric_scene).radii.y == 1.5f &&
+                geometry_of<Cylinder>(quadric_scene).height == 2 &&
+                geometry_of<Cone>(quadric_scene).center.x == 8 &&
+                geometry_of<Paraboloid>(quadric_scene).radius == 1 &&
+                geometry_of<Hyperboloid>(quadric_scene).axial_radius == 1 &&
+                std::holds_alternative<Diffuse>(objects<Hyperboloid>(quadric_scene)[0]->material),
+                "all quadric component descriptions and material references survive detached AST conversion");
+        const GpuGeometry gpu_quadrics[]{prepare_geometry(geometry_of<Sphere>(quadric_scene)),
+            prepare_geometry(geometry_of<Ellipsoid>(quadric_scene)), prepare_geometry(geometry_of<Cylinder>(quadric_scene)),
+            prepare_geometry(geometry_of<Cone>(quadric_scene)), prepare_geometry(geometry_of<Paraboloid>(quadric_scene)),
+            prepare_geometry(geometry_of<Hyperboloid>(quadric_scene))};
+        for (const auto& geometry : gpu_quadrics)
+            require(geometry.kind == GeometryKind::quadric, "all six CPU shapes lower to the same GPU geometry type");
+        rejects_build(text + replace(quadrics, "radii [0.75, 1.5, 0.5]", "radii [0, 1.5, 0.5]"), "dimensions");
+        for (const std::string name : {"cylinder", "cone", "paraboloid", "hyperboloid"}) {
+            const std::string parameters = name == "hyperboloid" ? "radius 1 axial_radius 1 height 0" : "radius 1 height 0";
+            rejects_build(text + "\n" + name + " { center [0, 2, 0] " + parameters + " material red }", "positive");
+        }
+        rejects_build(text + replace(quadrics, "axial_radius 1", "axial_radius -1"), "positive");
+        rejects(text + replace(quadrics, "material red", "material missing"), "unknown material");
+        const std::string csg_quadrics = R"(
+csg { material red union {
+    ellipsoid { center [0, 2, 0] radii [1, 2, 3] }
+    difference {
+        cylinder { center [0, 2, 0] radius 1 height 2 }
+        intersection {
+            cone { center [0, 2, 0] radius 1 height 2 }
+            union {
+                paraboloid { center [0, 2, 0] radius 1 height 2 }
+                hyperboloid { center [0, 2, 0] radius 0.6 axial_radius 1 height 2 }
+            }
+        }
+    }
+} }
+)";
+        const auto csg_quadric_scene = build_scene_description(detached_ast(text + csg_quadrics, "csg-quadrics.hipscene"));
+        const auto& csg_root = geometry_of<Csg>(csg_quadric_scene).root;
+        require(std::holds_alternative<Ellipsoid>(csg_root.children[0].geometry) &&
+                std::holds_alternative<Cylinder>(csg_root.children[1].children[0].geometry) &&
+                std::holds_alternative<Cone>(csg_root.children[1].children[1].children[0].geometry) &&
+                std::holds_alternative<Paraboloid>(csg_root.children[1].children[1].children[1].children[0].geometry) &&
+                std::holds_alternative<Hyperboloid>(csg_root.children[1].children[1].children[1].children[1].geometry),
+                "all new quadric shapes survive CSG parsing and building");
+        rejects_build(text + replace(csg_quadrics, "axial_radius 1", "axial_radius 0"), "positive");
+        rejects_build(text + replace(csg_quadrics, "radii [1, 2, 3]", "radii [1, 0, 3]"), "dimensions");
+        rejects(text + replace(csg_quadrics, "height 2 }", "height 2 material red }"), "}");
+        const auto reject_gpu = [&](const auto& geometry, const char* reason) {
+            try { (void)prepare_geometry(geometry); }
+            catch (const std::runtime_error& error) {
+                require(std::string(error.what()).find(reason) != std::string::npos, "explicit GPU quadric validation error");
+                return;
+            }
+            throw std::runtime_error("Invalid GPU quadric accepted");
+        };
+        reject_gpu(Ellipsoid{{}, {1, std::numeric_limits<float>::quiet_NaN(), 1}}, "finite");
+        reject_gpu(Cylinder{{}, 1, 0}, "dimensions");
+        reject_gpu(Sphere{{1e20f, 0, 0}, 1}, "bounds");
+        reject_gpu(Hyperboloid{{}, 1, 1e-30f, 1e20f}, "waist");
         const auto compact = parse_scene_description(replace(text, "camera {", "camera{"));
         require(compact.settings.camera.position.z == 12, "punctuation does not require whitespace");
         require(std::holds_alternative<Wood>(compact.settings.room.textures[1]) &&

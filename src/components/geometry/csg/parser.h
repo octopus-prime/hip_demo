@@ -1,6 +1,11 @@
 #pragma once
 
 #include "components/geometry/sphere/parser.h"
+#include "components/geometry/ellipsoid/parser.h"
+#include "components/geometry/cylinder/parser.h"
+#include "components/geometry/cone/parser.h"
+#include "components/geometry/paraboloid/parser.h"
+#include "components/geometry/hyperboloid/parser.h"
 #include "components/geometry/torus/parser.h"
 #include "components/geometry/text/parser.h"
 #include "components/geometry/csg/description.h"
@@ -18,9 +23,14 @@ using hip_demo::parsing::Vector;
 using hip_demo::parsing::Sphere;
 using hip_demo::parsing::Torus;
 using hip_demo::parsing::Text;
+using hip_demo::parsing::Ellipsoid;
+using hip_demo::parsing::Cylinder;
+using hip_demo::parsing::Cone;
+using hip_demo::parsing::Paraboloid;
+using hip_demo::parsing::Hyperboloid;
 struct NodeParsed {
     Position where;
-    std::variant<Sphere, Torus, Text> shape;
+    std::variant<Sphere, Torus, Text, Ellipsoid, Cylinder, Cone, Paraboloid, Hyperboloid> shape;
     CsgOperation operation = CsgOperation::unite;
     std::vector<NodeParsed> children;
 };
@@ -45,7 +55,7 @@ using hip_demo::parsing::CsgNode;
 using hip_demo::parsing::CsgBranch;
 using hip_demo::parsing::Csg;
 inline bp::rule<hip_demo::parsing::csg_branch_p_, CsgBranch> csg_branch_p = "binary CSG operation";
-inline bp::rule<hip_demo::parsing::csg_node_p_, CsgNode> csg_node_p = "CSG sphere, torus, text or operation";
+inline bp::rule<hip_demo::parsing::csg_node_p_, CsgNode> csg_node_p = "CSG geometry or operation";
 inline bp::rule<hip_demo::parsing::csg_p_, Csg> csg_p = "CSG object";
 
 inline auto csg_branch_p_def = position_p >> (
@@ -54,6 +64,26 @@ inline auto csg_branch_p_def = position_p >> (
     (bp::lit("difference") >> bp::attr(CsgOperation::difference)))
     > '{' > bp::repeat(2)[csg_node_p] > '}';
 inline auto csg_node_p_def =
+    csg_ellipsoid_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_cylinder_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_cone_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_paraboloid_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
+    csg_hyperboloid_p[([](auto& context) {
+        const auto& shape = bp::_attr(context);
+        bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
+    })] |
     csg_sphere_p[([](auto& context) {
         const auto& shape = bp::_attr(context);
         bp::_val(context) = CsgNode{shape.where, shape, CsgOperation::unite, {}};
