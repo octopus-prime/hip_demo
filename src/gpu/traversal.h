@@ -16,55 +16,54 @@ __device__ inline bool hit_room(const Ray& ray, float maximum_distance, Hit& hit
     return true;
 }
 
-__device__ inline bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
-    if (!scene.geometry) return false;
-    bool found = false;
-    float closest_distance = 1.0e30f;
-    Hit candidate{};
-
-    hiprtRay traversal_ray{};
-    traversal_ray.origin = ray.origin;
-    traversal_ray.direction = ray.direction;
-    traversal_ray.minT = 0.001f;
-    traversal_ray.maxT = closest_distance;
-    hiprtGeomCustomTraversalClosest traversal(
-        scene.geometry, traversal_ray, hiprtTraversalHintDefault, nullptr, scene.functions);
-    const hiprtHit result = traversal.getNextHit();
-    if (result.hasHit()) {
-        candidate.distance = result.t;
-        candidate.point = ray.origin + result.t * ray.direction;
-        set_face_normal(candidate, ray, result.normal);
-        if (result.primID < scene.primitive_count) {
-            candidate.object_id = result.primID;
-            set_material(candidate, scene.primitives[result.primID].material);
-        } else if (result.primID - scene.primitive_count < scene.csg_count) {
-            candidate.object_id = result.primID;
-            candidate.csg_leaf = __float_as_uint(result.uv.x);
-            set_material(candidate, scene.csg_materials ? scene.csg_materials[candidate.csg_leaf] :
-                         scene.csgs[result.primID - scene.primitive_count].material);
-        } else {
-            const auto& glyph = scene.glyphs[result.primID - scene.primitive_count - scene.csg_count];
-            candidate.object_id = glyph.object_id;
-            set_material(candidate, glyph.material);
-        }
-        apply_texture(candidate, ray, scene.settings);
-        closest_hit = candidate;
-        found = true;
+__device__ inline void shade_custom_hit(const Ray& ray, const hiprtHit& result, Hit& candidate, TraceScene scene) {
+    candidate = {};
+    candidate.distance = result.t;
+    candidate.point = ray.origin + result.t * ray.direction;
+    set_face_normal(candidate, ray, result.normal);
+    if (result.primID < scene.primitive_count) {
+        candidate.object_id = result.primID;
+        set_material(candidate, scene.primitives[result.primID].material);
+    } else if (result.primID - scene.primitive_count < scene.csg_count) {
+        candidate.object_id = result.primID;
+        candidate.csg_leaf = __float_as_uint(result.uv.x);
+        set_material(candidate, scene.csg_materials ? scene.csg_materials[candidate.csg_leaf] :
+                     scene.csgs[result.primID - scene.primitive_count].material);
+    } else {
+        const auto& glyph = scene.glyphs[result.primID - scene.primitive_count - scene.csg_count];
+        candidate.object_id = glyph.object_id;
+        set_material(candidate, glyph.material);
     }
-    return found;
+    apply_texture(candidate, ray, scene.settings);
 }
 
-__device__ inline bool hit_instances(const Ray& ray, float maximum, Hit& hit, TraceScene scene) {
-    if (!scene.instance_scene) return false;
+__device__ inline void shade_mesh_hit(const Ray& ray, const hiprtHit& result, Hit& hit, TraceScene scene) {
+    hit = {};
+    hit.distance = result.t;
+    hit.point = ray.origin + result.t * ray.direction;
+    set_face_normal(hit, ray, normalize(result.normal));
+    const auto& triangle = scene.triangle_materials[result.primID];
+    hit.object_id = triangle.object_id;
+    set_material(hit, triangle.material);
+    apply_texture(hit, ray, scene.settings);
+}
+
+__device__ inline bool hit_custom_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
+    if (!scene.geometry) return false;
     hiprtRay traversal_ray{};
     traversal_ray.origin = ray.origin;
     traversal_ray.direction = ray.direction;
     traversal_ray.minT = 0.001f;
-    traversal_ray.maxT = maximum;
-    hiprtSceneTraversalClosest traversal(scene.instance_scene, traversal_ray, hiprtFullRayMask,
-                                         hiprtTraversalHintDefault, nullptr, scene.functions);
+    traversal_ray.maxT = 1.0e30f;
+    hiprtGeomCustomTraversalClosest traversal(
+        scene.geometry, traversal_ray, hiprtTraversalHintDefault, nullptr, scene.functions);
     const auto result = traversal.getNextHit();
     if (!result.hasHit()) return false;
+    shade_custom_hit(ray, result, closest_hit, scene);
+    return true;
+}
+
+__device__ inline void shade_instance_hit(const Ray& ray, const hiprtHit& result, Hit& hit, TraceScene scene) {
     const auto& placement = scene.instances[result.instanceID];
     const auto prototype = scene.prototypes[placement.prototype].scene;
     GpuMaterial material{};
@@ -92,11 +91,53 @@ __device__ inline bool hit_instances(const Ray& ray, float maximum, Hit& hit, Tr
     hit.normal = instance::normal_to_world(transform, hit.normal);
     hit.geometric_normal = instance::normal_to_world(transform, hit.geometric_normal);
     hit.object_id = placement.object_id;
+}
+
+__device__ inline bool hit_instances(const Ray& ray, float maximum, Hit& hit, TraceScene scene) {
+    if (!scene.instance_scene) return false;
+    hiprtRay traversal_ray{};
+    traversal_ray.origin = ray.origin;
+    traversal_ray.direction = ray.direction;
+    traversal_ray.minT = 0.001f;
+    traversal_ray.maxT = maximum;
+    hiprtSceneTraversalClosest traversal(scene.instance_scene, traversal_ray, hiprtFullRayMask,
+                                         hiprtTraversalHintDefault, nullptr, scene.functions);
+    const auto result = traversal.getNextHit();
+    if (!result.hasHit()) return false;
+    shade_instance_hit(ray, result, hit, scene);
     return true;
 }
 
-template<bool Instanced = true>
+template<bool Instanced>
+__device__ inline bool hit_unified_objects(const Ray& ray, Hit& hit, TraceScene scene) {
+    hiprtRay traversal_ray{};
+    traversal_ray.origin = ray.origin;
+    traversal_ray.direction = ray.direction;
+    traversal_ray.minT = 0.001f;
+    traversal_ray.maxT = 1.0e30f;
+    hiprtSceneTraversalClosest traversal(scene.unified_scene, traversal_ray, hiprtFullRayMask,
+                                         hiprtTraversalHintDefault, nullptr, scene.functions);
+    auto result = traversal.getNextHit();
+    if (!result.hasHit()) return false;
+    if (result.instanceID == scene.unified_custom) {
+        shade_custom_hit(ray, result, hit, scene);
+    } else if (result.instanceID == scene.unified_mesh) {
+        shade_mesh_hit(ray, result, hit, scene);
+    } else {
+        if constexpr (Instanced) {
+            result.instanceID -= scene.unified_instance_offset;
+            shade_instance_hit(ray, result, hit, scene);
+        } else {
+            __builtin_trap();
+        }
+    }
+    return true;
+}
+
+template<bool Instanced = true, bool Unified = false>
 __device__ inline bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene scene) {
+    if constexpr (Unified)
+        return scene.unified_scene && hit_unified_objects<Instanced>(ray, closest_hit, scene);
     bool found = hit_custom_objects(ray, closest_hit, scene);
     if (scene.mesh) {
         hiprtRay traversal_ray{};
@@ -107,14 +148,7 @@ __device__ inline bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene 
         hiprtGeomTraversalClosest traversal(scene.mesh, traversal_ray);
         const hiprtHit result = traversal.getNextHit();
         if (result.hasHit()) {
-            closest_hit.distance = result.t;
-            closest_hit.point = ray.origin + result.t * ray.direction;
-            set_face_normal(closest_hit, ray, normalize(result.normal));
-            const auto& triangle = scene.triangle_materials[result.primID];
-            closest_hit.object_id = triangle.object_id;
-            closest_hit.csg_leaf = csg_outside;
-            set_material(closest_hit, triangle.material);
-            apply_texture(closest_hit, ray, scene.settings);
+            shade_mesh_hit(ray, result, closest_hit, scene);
             found = true;
         }
     }
@@ -128,9 +162,9 @@ __device__ inline bool hit_objects(const Ray& ray, Hit& closest_hit, TraceScene 
     return found;
 }
 
-template<bool Instanced = true>
+template<bool Instanced = true, bool Unified = false>
 __device__ inline bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene scene) {
-    bool found = hit_objects<Instanced>(ray, closest_hit, scene);
+    bool found = hit_objects<Instanced, Unified>(ray, closest_hit, scene);
     const float closest_distance = found ? closest_hit.distance : 1.0e30f;
     Hit candidate{};
     if (hit_room(ray, closest_distance, candidate, false, scene.settings)) {
@@ -140,7 +174,7 @@ __device__ inline bool hit_scene(const Ray& ray, Hit& closest_hit, TraceScene sc
     return found;
 }
 
-template<bool Instanced = true>
+template<bool Instanced = true, bool Unified = false>
 __device__ inline bool occluded(const Ray& ray, float maximum_distance, TraceScene scene) {
     if (maximum_distance <= 0.001f) return false;
     Hit room_hit{};
@@ -151,6 +185,16 @@ __device__ inline bool occluded(const Ray& ray, float maximum_distance, TraceSce
     traversal_ray.direction = ray.direction;
     traversal_ray.minT = 0.001f;
     traversal_ray.maxT = maximum_distance;
+    if constexpr (Unified) {
+        if (scene.unified_scene) {
+            hiprtSceneTraversalAnyHit traversal(scene.unified_scene, traversal_ray, hiprtFullRayMask,
+                                                 hiprtTraversalHintDefault, nullptr, scene.functions);
+            for (auto hit = traversal.getNextHit(); hit.hasHit(); hit = traversal.getNextHit()) {
+                if (hit.t < maximum_distance || hit.instanceID == scene.unified_custom) return true;
+            }
+        }
+        return false;
+    }
     if (scene.geometry) {
         hiprtGeomCustomTraversalAnyHit traversal(
             scene.geometry, traversal_ray, hiprtTraversalHintDefault, nullptr, scene.functions);

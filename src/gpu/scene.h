@@ -23,7 +23,7 @@ public:
         : HiprtScene(device, prepare_scene(description)) {}
 
     HiprtScene(int device, PreparedScene prepared, hiprtContext shared_context = nullptr,
-               unsigned int geometry_type = 0) : context_(shared_context) {
+               unsigned int geometry_type = 0, bool unified = false) : context_(shared_context), unified_(unified) {
         hipCtx_t hip_context = nullptr;
         // HIP RT 3.0 requires this handle; HIP 7.1 has no non-deprecated context getter.
 #pragma clang diagnostic push
@@ -190,12 +190,13 @@ public:
                 mesh_triangle_count_, cat_detail_start_, settings_.get(),
                 primitives_.get(), triangle_materials_.get(), text_glyphs_.get(), primitive_count_,
                 csgs_.get(), csg_count_, emitters_.get(), emitter_count_, emitter_triangles_.get(),
-                instance_scene_.value, instances_.get(), prototype_views_.get(), csg_materials_.get()};
+                unified_ ? nullptr : instance_scene_.value, instances_.get(), prototype_views_.get(), csg_materials_.get(),
+                unified_ ? instance_scene_.value : nullptr, unified_custom_, unified_mesh_, unified_instance_offset_};
     }
 
 private:
     void build_instances(int device, PreparedScene& prepared) {
-        if (prepared.instances.empty()) return;
+        if (prepared.instances.empty() && (!unified_ || (!geometry_.value && !mesh_.value))) return;
         if (!functions_.value) {
             functions_.context = context_.value;
             check_hiprt(hiprtCreateFuncTable(context_.value, static_cast<unsigned int>(prepared.prototypes.size()) + 1,
@@ -220,8 +221,24 @@ private:
         }
         std::vector<hiprtInstance> references;
         std::vector<hiprtFrameMatrix> frames;
-        references.reserve(prepared.instances.size());
-        frames.reserve(prepared.instances.size());
+        references.reserve(prepared.instances.size() + 2);
+        frames.reserve(prepared.instances.size() + 2);
+        const auto append_base = [&](hiprtGeometry geometry, unsigned int& index) {
+            if (!geometry) return;
+            index = static_cast<unsigned int>(references.size());
+            hiprtInstance reference{};
+            reference.type = hiprtInstanceTypeGeometry;
+            reference.geometry = geometry;
+            references.push_back(reference);
+            hiprtFrameMatrix frame{};
+            frame.matrix[0][0] = frame.matrix[1][1] = frame.matrix[2][2] = 1;
+            frames.push_back(frame);
+        };
+        if (unified_) {
+            append_base(geometry_.value, unified_custom_);
+            append_base(mesh_.value, unified_mesh_);
+        }
+        unified_instance_offset_ = static_cast<unsigned int>(references.size());
         for (const auto& placement : prepared.instances) {
             const auto& prototype = *prototype_scenes_[placement.prototype];
             hiprtInstance reference{};
@@ -241,14 +258,16 @@ private:
             frames.push_back(frame);
             placed_triangles += prototype.mesh_triangle_count_;
         }
-        instances_ = allocate_device<GpuInstance>(prepared.instances.size(), "Allocating instance shading data");
-        prototype_views_ = allocate_device<GpuPrototype>(views.size(), "Allocating shared geometry views");
+        if (!prepared.instances.empty()) {
+            instances_ = allocate_device<GpuInstance>(prepared.instances.size(), "Allocating instance shading data");
+            prototype_views_ = allocate_device<GpuPrototype>(views.size(), "Allocating shared geometry views");
+            check_hip(hipMemcpy(instances_.get(), prepared.instances.data(), prepared.instances.size() * sizeof(GpuInstance),
+                                hipMemcpyHostToDevice), "Uploading instance shading data");
+            check_hip(hipMemcpy(prototype_views_.get(), views.data(), views.size() * sizeof(GpuPrototype),
+                                hipMemcpyHostToDevice), "Uploading shared geometry views");
+        }
         instance_references_ = allocate_device<hiprtInstance>(references.size(), "Allocating HIP RT instances");
         instance_frames_ = allocate_device<hiprtFrameMatrix>(frames.size(), "Allocating instance frames");
-        check_hip(hipMemcpy(instances_.get(), prepared.instances.data(), prepared.instances.size() * sizeof(GpuInstance),
-                            hipMemcpyHostToDevice), "Uploading instance shading data");
-        check_hip(hipMemcpy(prototype_views_.get(), views.data(), views.size() * sizeof(GpuPrototype),
-                            hipMemcpyHostToDevice), "Uploading shared geometry views");
         check_hip(hipMemcpy(instance_references_.get(), references.data(), references.size() * sizeof(hiprtInstance),
                             hipMemcpyHostToDevice), "Uploading HIP RT instances");
         check_hip(hipMemcpy(instance_frames_.get(), frames.data(), frames.size() * sizeof(hiprtFrameMatrix),
@@ -271,7 +290,7 @@ private:
         check_hiprt(hiprtBuildScene(context_.value, hiprtBuildOperationBuild, input, options, temporary.get(), nullptr,
                                    instance_scene_.value), "Building instance BVH");
         check_hip(hipDeviceSynchronize(), "Waiting for instance BVH");
-        std::cout << "Instancing: " << references.size() << " placements, "
+        std::cout << (unified_ ? "Unified scene: " : "Instancing: ") << references.size() << " placements, "
                   << std::count(used.begin(), used.end(), true) << " shared geometries; "
                   << shared_triangles << " stored triangles / " << placed_triangles << " placed triangles.\n";
         std::cout << "Shared triangle vertex buffers: "
@@ -307,6 +326,10 @@ private:
     std::unique_ptr<hiprtInstance, HipBufferDeleter> instance_references_;
     std::unique_ptr<hiprtFrameMatrix, HipBufferDeleter> instance_frames_;
     HiprtSceneOwner instance_scene_;
+    bool unified_ = false;
+    unsigned int unified_custom_ = hiprtInvalidValue;
+    unsigned int unified_mesh_ = hiprtInvalidValue;
+    unsigned int unified_instance_offset_ = 0;
 };
 
 }

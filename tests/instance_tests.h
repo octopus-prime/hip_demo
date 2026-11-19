@@ -4,6 +4,7 @@
 #include "rendering/integrator.h"
 
 namespace hip_demo {
+template<bool Unified>
 __global__ void check_instances(TraceScene scene, unsigned int count, unsigned int* failure) {
     const unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     const auto& placement = scene.instances[i % count];
@@ -24,7 +25,9 @@ __global__ void check_instances(TraceScene scene, unsigned int count, unsigned i
         set_material(shading, placement.material);
         apply_texture(shading, local, scene.settings);
     }
-    const bool found = hit_instances(world, 6 * length, actual, scene);
+    const bool found = scene.unified_scene
+        ? hit_unified_objects<true>(world, actual, scene) && actual.distance <= 6 * length
+        : hit_instances(world, 6 * length, actual, scene);
     unsigned int failed = 0;
     if (found != reference || (found && actual.object_id != placement.object_id)) failed |= 1;
     // Translated FP32 rays amplify coordinate rounding near tangential intersections.
@@ -42,7 +45,7 @@ __global__ void check_instances(TraceScene scene, unsigned int count, unsigned i
                dot(actual.normal, instance::normal_to_world(placement.transform, shading.normal)),
                actual.front_face, expected.front_face);
     const float maximum = reference ? expected.distance * length + (i % 2 ? 0.01f : -0.01f) : 6 * length;
-    if (occluded(world, maximum, scene) != (reference && i % 2 != 0)) failed |= 4;
+    if (occluded<true, Unified>(world, maximum, scene) != (reference && i % 2 != 0)) failed |= 4;
     if (found) {
         const auto material = placement.material_override ? placement.material : GpuMaterial{};
         if (placement.material_override && actual.material != material.kind) failed |= 8;
@@ -50,7 +53,7 @@ __global__ void check_instances(TraceScene scene, unsigned int count, unsigned i
     const auto light = sample_light(random, scene);
     Hit surface{};
     const Ray incoming{light.point + 0.05f * light.normal, -light.normal};
-    if (!hit_objects(incoming, surface, scene) || surface.object_id != light.object_id ||
+    if (!hit_objects<true, Unified>(incoming, surface, scene) || surface.object_id != light.object_id ||
         !surface.front_face || !surface.sampled_emitter ||
         fabsf(surface.distance - 0.05f) > 0.0001f ||
         dot(surface.emission - light.radiance, surface.emission - light.radiance) > 0.000001f) failed |= 16;
@@ -59,16 +62,83 @@ __global__ void check_instances(TraceScene scene, unsigned int count, unsigned i
     if (i == 0) {
         Hit rectangle{};
         const Ray ray{{30, 5, -2}, {0, 0, 1}};
-        if (!hit_objects(ray, rectangle, scene) || fabsf(rectangle.distance - 2) > 0.00001f ||
+        if (!hit_objects<true, Unified>(ray, rectangle, scene) || fabsf(rectangle.distance - 2) > 0.00001f ||
             rectangle.geometric_normal.z > -0.9999f ||
-            occluded(ray, rectangle.distance, scene) ||
-            !occluded(ray, nextafterf(rectangle.distance, INFINITY), scene)) failed |= 64;
+            occluded<true, Unified>(ray, rectangle.distance, scene) ||
+            !occluded<true, Unified>(ray, nextafterf(rectangle.distance, INFINITY), scene)) failed |= 64;
         Hit blocker{};
         const Ray blocker_ray{{36, 5, -2}, {0, 0, 1}};
-        if (!hit_objects(blocker_ray, blocker, scene) || fabsf(blocker.distance - 1) > 0.00001f ||
-            !occluded(blocker_ray, 2, scene) || occluded(blocker_ray, blocker.distance, scene)) failed |= 64;
+        if (!hit_objects<true, Unified>(blocker_ray, blocker, scene) || fabsf(blocker.distance - 1) > 0.00001f ||
+            !occluded<true, Unified>(blocker_ray, 2, scene) ||
+            occluded<true, Unified>(blocker_ray, blocker.distance, scene)) failed |= 64;
     }
     atomicOr(failure, failed);
+}
+
+__global__ void compare_traversal_modes(TraceScene split, TraceScene unified, unsigned int* failure) {
+    const auto i = blockIdx.x * blockDim.x + threadIdx.x;
+    Random random{i * 2891336453u + 741103597u};
+    const float3 origin{-20 + 40 * random.next(), 1 + 36 * random.next(), 8};
+    const Ray ray{origin, normalize(float3{8 * random.next() - 4, 8 * random.next() - 4, -8})};
+    Hit a{}, b{};
+    const bool found_a = hit_scene(ray, a, split);
+    const bool found_b = hit_scene<true, true>(ray, b, unified);
+    unsigned int failed = 0;
+    if (found_a != found_b) failed |= 1;
+    if (found_a && found_b) {
+        if (fabsf(a.distance - b.distance) > 0.0001f || a.object_id != b.object_id ||
+            a.csg_leaf != b.csg_leaf || a.front_face != b.front_face ||
+            a.material != b.material || a.texture != b.texture ||
+            a.sampled_emitter != b.sampled_emitter || a.has_normal_map != b.has_normal_map ||
+            dot(a.normal, b.normal) < 0.9999f || dot(a.geometric_normal, b.geometric_normal) < 0.9999f ||
+            dot(a.albedo - b.albedo, a.albedo - b.albedo) > 0.000001f ||
+            dot(a.emission - b.emission, a.emission - b.emission) > 0.000001f)
+            failed |= 2;
+    }
+    const float maximum = found_a ? a.distance + (i % 2 ? 0.01f : -0.01f) : 20.0f;
+    if (occluded(ray, maximum, split) != occluded<true, true>(ray, maximum, unified)) failed |= 4;
+    if (split.emitter_count) {
+        const auto light = sample_light(random, split);
+        const Ray incoming{light.point + 0.05f * light.normal, -light.normal};
+        const bool hit_a = hit_objects(incoming, a, split), hit_b = hit_objects<true, true>(incoming, b, unified);
+        if (hit_a != hit_b || (hit_a && (a.object_id != b.object_id ||
+            a.sampled_emitter != b.sampled_emitter || fabsf(a.distance - b.distance) > 0.0001f))) failed |= 8;
+        if (hit_a && hit_b && a.sampled_emitter &&
+            fabs(light_pdf(incoming, a, split) - light_pdf(incoming, b, unified)) > 0.000001) failed |= 16;
+    }
+    atomicOr(failure, failed);
+}
+
+inline void run_unified_traversal_tests(int device, SceneDescription description) {
+    const Material base = Phong{Wood{}};
+    Mesh crystal;
+    crystal.kind = SceneMeshKind::crystal;
+    CsgNode cut{Sphere{}, CsgOperation::difference,
+                {CsgNode{Cylinder{{5, 2, 0}, 1, 2}}, CsgNode{Cylinder{{5, 2, 0}, 0.4f, 4}}}};
+    description.objects = {
+        {Sphere{{0, 2, 0}, 1}, base}, {crystal, base}, {Csg{cut}, base},
+        {ExtrudedText{"C:\\Windows\\Fonts\\arial.ttf", "O", 1, 0.2f, {-7, 2, 0}}, base},
+        {hip_demo::Rectangle{{0, 45, 0}, 2, 2}, Emissive{ConstantColor{{3, 4, 5}}}}
+    };
+    auto failure = allocate_device<unsigned int>(1, "Allocating unified traversal checks");
+    // Mixed base geometry with placements, then base-only, custom-only, mesh-only and room-only scenes.
+    for (int variant = 0; variant < 5; ++variant) {
+        if (variant == 1) description.instances.clear();
+        if (variant == 2) description.objects = {{Sphere{{0, 2, 0}, 1}, base}};
+        if (variant == 3) description.objects = {{crystal, base}};
+        if (variant == 4) description.objects.clear();
+        const auto prepared = prepare_scene(description);
+        const HiprtScene split(device, prepared);
+        const HiprtScene unified(device, prepared, nullptr, 0, true);
+        check_hip(hipMemset(failure.get(), 0, sizeof(unsigned int)), "Clearing unified traversal checks");
+        hipLaunchKernelGGL(compare_traversal_modes, dim3(64), dim3(256), 0, 0,
+                           split.scene(), unified.scene(), failure.get());
+        check_hip(hipGetLastError(), "Launching unified traversal checks");
+        unsigned int result = 0;
+        check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost), "Reading unified traversal checks");
+        if (result) throw std::runtime_error("Unified traversal variant " + std::to_string(variant) +
+            " changed hits, shading, shadows or light PDFs (flags " + std::to_string(result) + ")");
+    }
 }
 
 inline void run_instance_tests(int device) {
@@ -119,16 +189,20 @@ inline void run_instance_tests(int device) {
         prepared.instances.size() != 29 || prepared.emitters.size() != 3 ||
         prepared.prototypes[9].emitter_triangles.size() != mesh_triangles.size())
         throw std::runtime_error("Instances duplicated mesh storage or lost shared light distributions");
-    const HiprtScene scene(device, prepared);
-    auto failure = allocate_device<unsigned int>(1, "Allocating instance test failures");
-    check_hip(hipMemset(failure.get(), 0, sizeof(unsigned int)), "Clearing instance test failures");
-    hipLaunchKernelGGL(check_instances, dim3(16), dim3(256), 0, 0,
-                       scene.scene(), static_cast<unsigned int>(prepared.instances.size()), failure.get());
-    check_hip(hipGetLastError(), "Launching instance checks");
-    unsigned int result = 0;
-    check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost), "Reading instance checks");
-    if (result) throw std::runtime_error("Instance sharing, transform, visibility or light checks failed (flags " +
-                                         std::to_string(result) + ")");
+    for (const bool unified : {false, true}) {
+        const HiprtScene scene(device, prepared, nullptr, 0, unified);
+        auto failure = allocate_device<unsigned int>(1, "Allocating instance test failures");
+        check_hip(hipMemset(failure.get(), 0, sizeof(unsigned int)), "Clearing instance test failures");
+        const auto kernel = unified ? check_instances<true> : check_instances<false>;
+        hipLaunchKernelGGL(kernel, dim3(16), dim3(256), 0, 0,
+                           scene.scene(), static_cast<unsigned int>(prepared.instances.size()), failure.get());
+        check_hip(hipGetLastError(), "Launching instance checks");
+        unsigned int result = 0;
+        check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost), "Reading instance checks");
+        if (result) throw std::runtime_error("Instance sharing, transform, visibility or light checks failed (flags " +
+                                             std::to_string(result) + ")");
+    }
+    run_unified_traversal_tests(device, description);
     std::cout << "Shared instances, nonuniform transforms, normals, materials, endpoint visibility and light PDFs passed.\n";
 }
 }

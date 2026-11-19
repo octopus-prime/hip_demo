@@ -55,6 +55,9 @@ AppOptions load_options(int argc, char** argv) {
         ("relative-error", po::value<float>(&sampling.relative_error)->default_value(sampling.relative_error, "0.05"), "Adaptive relative noise threshold")
         ("brightness-floor", po::value<float>(&sampling.brightness_floor)->default_value(sampling.brightness_floor, "0.05"), "Adaptive brightness floor")
         ("device", po::value<int>(&render.device)->default_value(render.device), "HIP device index; -1 selects automatically");
+    rendering.add_options()
+        ("unified-traversal", po::value<bool>(&render.unified_traversal)->default_value(false)->implicit_value(true),
+         "Experimental: traverse base custom geometry, meshes and instances in one HIP RT scene");
     po::options_description all("Usage: hiprt_demo [options]");
     all.add_options()
         ("help,h", "Show help without loading a scene or initializing the GPU")
@@ -112,7 +115,8 @@ void save_render_config(const RenderOptions& options, const std::string& path) {
          << "\nsamples = " << sampling.maximum << "\nmin-samples = " << sampling.minimum
          << "\nspecular-min-samples = " << sampling.specular_minimum << "\nbatch-size = " << sampling.batch
          << "\nrelative-error = " << sampling.relative_error << "\nbrightness-floor = " << sampling.brightness_floor
-         << "\ndevice = " << options.device << '\n';
+         << "\ndevice = " << options.device
+         << "\nunified-traversal = " << (options.unified_traversal ? "true" : "false") << '\n';
     std::ofstream file(path, std::ios::binary);
     if (!file) throw std::runtime_error("Could not open render config for writing: " + path);
     file << text.str();

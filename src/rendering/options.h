@@ -19,6 +19,7 @@ struct RenderOptions {
     std::string output = "render.png";
     SamplingOptions sampling;
     int device = -1;
+    bool unified_traversal = false;
 };
 
 }

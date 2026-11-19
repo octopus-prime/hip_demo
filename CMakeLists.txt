@@ -256,6 +256,60 @@ add_custom_target(
     DEPENDS ${HIPRT_RUNTIME_FILES} "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply/LICENSE.txt"
     VERBATIM
 )
+configure_file(src2/assets.h.in hiprt_tutorial_assets.h @ONLY)
+
+function(add_tutorial_executable target source_path)
+    set(source "${CMAKE_CURRENT_SOURCE_DIR}/${source_path}")
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/${target}${CMAKE_EXECUTABLE_SUFFIX}")
+    set(sources "${source}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src2/camera.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src2/context.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src2/geometry.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src2/mesh.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src2/scene.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src2/renderer.cpp")
+    add_custom_command(
+        OUTPUT "${output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+        COMMAND ${HIP_SDK_ENV} "${HIPCC_EXECUTABLE}" ${HIPCC_ARGUMENTS} -fgpu-rdc
+            "-I${libpng_SOURCE_DIR}" "-I${libpng_BINARY_DIR}"
+            ${sources}
+            -x none "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}" ${HIPRT_LINK_OPTIONS}
+            "$<TARGET_FILE:png_static>" "$<TARGET_FILE:zlibstatic>"
+            "$<TARGET_FILE:ply_mesh>" "$<TARGET_FILE:rply>"
+            -o "${output}"
+        DEPENDS ${sources} ${HIP_DEMO_HEADERS}
+            "${CMAKE_CURRENT_BINARY_DIR}/hiprt_tutorial_assets.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/camera.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/context.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/geometry.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/mesh.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/scene.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/renderer.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/dielectric.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/path_scattering.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/area_light.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/gpu_event.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/function_table.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/math/polynomial.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/math/torus_roots.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/device_buffer.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src2/error.h" "${HIPRT_DEVICE_LIBRARY}" "${HIPRT_LIBRARY}"
+            png_static zlibstatic ply_mesh rply
+        VERBATIM
+        COMMENT "Compiling ${target}"
+    )
+    add_custom_target(${target} ALL
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${output}"
+            "${CMAKE_CURRENT_BINARY_DIR}/bin/${target}${CMAKE_EXECUTABLE_SUFFIX}"
+        DEPENDS "${output}"
+        VERBATIM)
+    add_dependencies(${target} hiprt_runtime)
+endfunction()
+
+add_tutorial_executable(hiprt_tutorial src2/main.cpp)
+add_tutorial_executable(tutorial_renderer_tests tests/tutorial_renderer_tests.cpp)
+
 add_library(rply STATIC third_party/rply/rply.c)
 target_include_directories(rply PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/rply")
 add_library(ply_mesh STATIC src/components/geometry/mesh/loading.cpp)
@@ -327,6 +381,15 @@ endfunction()
 add_hiprt_executable(hiprt_demo src/app/main.hip)
 add_hiprt_executable(hiprt_tests tests/hiprt_tests.hip)
 enable_testing()
+add_test(NAME tutorial_renderer_tests
+    COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/tutorial_renderer_tests${CMAKE_EXECUTABLE_SUFFIX}"
+        "${CMAKE_CURRENT_BINARY_DIR}/tutorial-renderer-tests.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+add_test(NAME tutorial_image_tests COMMAND "${CMAKE_COMMAND}"
+    "-DTUTORIAL=${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tutorial${CMAKE_EXECUTABLE_SUFFIX}"
+    "-DOUTPUT_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/tutorial-image-tests"
+    "-DPLY_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/orientation_z_up.ply"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/tutorial_image_tests.cmake")
 add_test(NAME hiprt_tests
     COMMAND "${CMAKE_CURRENT_BINARY_DIR}/bin/hiprt_tests${CMAKE_EXECUTABLE_SUFFIX}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/triangle_ascii.ply"

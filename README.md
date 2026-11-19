@@ -32,6 +32,625 @@ using adaptive sampling with at most **1024 samples per pixel**, and writes
 **`render.png`** in the current directory. These defaults are independent of
 which scene is selected.
 
+## HIP RT tutorial
+
+`src2` is a separate, minimal starting point for learning HIP RT, independent
+of the rendering pipeline but reusing its mesh import and polynomial helpers.
+It selects HIP device 0, prints its name, architecture
+and HIP RT header version, then uploads a diamond mesh (an octahedron with
+eight triangles), a twelve-triangle box, an analytic unit sphere and a
+configurable analytic torus, and a PLY dragon mesh. By default, it creates
+**6,000,000 instances**: 100 x 100 x 75 spatial groups, each containing three
+spheres, one diamond, two dragons, one box and one torus with different
+materials and transforms. All instances
+of each shape share its geometry and GPU buffers.
+Each group uses six colored Phong materials, one perfect mirror and one clear
+glass material (IOR 1.5). Their assignment rotates by one slot between
+neighboring groups along each axis: prototype `i` in group `(x, y, z)` uses
+material `(i + x + y + z) % 8`. Every shape therefore appears with every
+material, including mirror and glass dragons. This is a static spatial
+variation, not an animation; the executable still renders just one frame.
+Use `--small` for just eight instances: three spheres and a torus above,
+one diamond, two dragons and a box below. In both modes there are exactly five geometry
+BVHs and one scene BVH.
+That is six BVHs total, not one geometry BVH per instance.
+A 2D grid of threads renders `scene.png` at 3840 x 2160 pixels (4K UHD),
+including in `--small` mode.
+Use `--dragon` for a separate scene with a glass sphere in front of one dragon
+above a mirror floor, point lighting and a camera framing the objects and their reflections, also
+at 4K. It writes `dragon.png`, leaving the other scenes' `scene.png` untouched,
+and builds only the PLY geometry, the two-triangle floor and an analytic sphere.
+The instances have base colors, Lambert diffuse lighting and optional Phong
+highlights from a warm point light. Shadows remain enabled; there is no
+additional ground or backdrop instance in the group scenes.
+Ray tracing remains the default. `--integrator path` enables diffuse indirect
+lighting and stochastic mirror/glass/diffuse path continuation using the same
+scene buffers and BVHs. `--cornell` supplies a small open-front room with red
+and green walls, a matte sphere and a glass sphere to demonstrate color bleeding;
+an emissive ceiling rectangle supplies the light instead of a point source.
+It needs no external PLY asset. Scene selectors are mutually exclusive.
+
+Thin C++ types separate resource ownership from camera values:
+
+- `Context` (`src2/context.h` / `.cpp`) creates and destroys the HIP RT context
+  and assigns custom-intersection dispatch slots.
+- `FunctionTable` (`src2/function_table.h`) owns a HIP RT function table.
+  Each scene owns one for both closest-hit and shadow queries; standalone
+  geometry queries create their own.
+- `DeviceBuffer<T>` (`src2/device_buffer.h`) allocates GPU memory, uploads CPU
+  data, downloads results and frees the allocation automatically. Its template
+  implementation stays in the header.
+- `load_ply_vertices(path, up)` (`src2/mesh.h` / `.cpp`) adapts the existing demo
+  PLY reader and fitting helper to the tutorial's `std::vector<float3>`.
+  It converts Z-up to Y-up by default (`MeshUp::y` preserves Y-up input),
+  uniformly fits the mesh into a 2 x 2 x 2 box and centers its bounding box
+  on the local origin. Triangle indices are expanded into consecutive vertices;
+  winding is preserved. ASCII and little-/big-endian binary PLY files are
+  supported, with triangle faces only. Vertex normals, colors and UVs are ignored.
+- `Geometry` (`src2/geometry.h` / `.cpp`) owns GPU triangle vertices or custom
+  bounds/payloads and a HIP RT geometry. Its mesh constructor accepts a nonempty
+  `std::span<const float3>` containing consecutive groups of three finite
+  vertices, one group per triangle (no index buffer).
+  `Geometry(context, UnitSphere{})` describes a
+  radius-1 sphere at the local origin. `Geometry(context, UnitBox{})` creates
+  a mesh box with local bounds [-1, 1] on all axes.
+  `Geometry(context, UnitPlane{})` creates a finite 2 x 2 rectangle at local
+  Y = 0, with X/Z bounds [-1, 1] and normal +Y. It uses two triangles and
+  HIP RT's built-in intersection, not an infinite analytic plane. Instances
+  can scale it into floors or rotate it into walls; the dragon's mirror
+  floor uses this same primitive. `Geometry(context,
+  Torus{.major_radius = 0.8f, .minor_radius = 0.25f})` creates a ring torus
+  around local Y: major radius is the distance from the origin to the tube
+  centerline, minor radius is the tube radius. Radii must be finite with
+  `0 < minor < major`, with representable float bounds/squares; horn and
+  spindle tori are not supported. `build()` allocates temporary memory, builds the BVH and
+  waits for the GPU before releasing that memory. `trace(ray)` launches the
+  kernel, waits, downloads its result and returns `std::optional<hiprtHit>`:
+  a hit or `std::nullopt` for a miss. Calling it before `build()` is an error.
+- `Scene` (`src2/scene.h` / `.cpp`) owns a HIP RT scene and its GPU instance
+  and transform buffers. Each `Instance` references an already-built
+  `Geometry` and supplies translation, axis-angle rotation, scale and a
+  `SurfaceMaterial material`. The material value is validated and equal values
+  are uploaded once into a shared GPU palette. Each instance stores a 32-bit
+  material ID; shading looks up `materials[material_ids[hit.instanceID]]`.
+  Equality compares all eight float components exactly (signed zero compares equal),
+  without approximate merging. The CPU `Instance` interface is unchanged.
+  The material has an RGB
+  `base_color` in [0, 1] (default 0.8 per channel).
+  `Scene::build()` builds the top-level
+  BVH; `Scene::trace()` returns a hit including `instanceID` and `primID`.
+  Two instances can have different instance IDs but share primitive 0 of
+  the same geometry. Transforms use HIP RT's `hiprtFrameSRT`; the tutorial
+  does not implement its own matrix or intersection transformations.
+  `specular_strength` in [0, 1] controls a white Phong highlight (default 0,
+  retaining diffuse-only behavior); positive `shininess` controls its width
+  (default 32). Higher exponents give narrower highlights.
+  `reflectivity` in [0, 1] mixes local lighting with an ideal mirror reflection
+  (default 0, retaining the existing images). This is separate from the
+  Phong highlight; 1 selects a pure mirror.
+  `transmission` in [0, 1] selects how much of the non-mirror part is glass
+  (default 0); `ior` is a finite refractive index of at least 1 (default 1.5).
+  Full transmission disables local diffuse/Phong shading and splits light
+  between dielectric reflection and refraction using Fresnel.
+  An `Instance` can also supply RGB `emission` (default zero). Nonzero emission
+  must be finite and nonnegative; values above one are allowed. Currently only
+  `UnitPlane` instances may emit. Emission is independent of the shared
+  reflectance palette, so existing material IDs, palette sizes and GPU material
+  layouts do not change. Emitters terminate paths and emit only from local +Y,
+  transformed with their instance; their back face is opaque and black.
+- `Camera` (`src2/camera.h` / `.cpp`) takes position, target, an up direction
+  and vertical field of view in degrees. It validates the inputs and computes
+  an orthonormal forward/right/up basis on the CPU. `GpuCamera` is its small
+  value representation; `generate_ray()` runs on the GPU and generates a
+  normalized perspective ray for a supplied subpixel offset (pixel center
+  by default). Camera arithmetic uses
+  `float` throughout and reuses `hiprt::cross`, `hiprt::dot` and
+  `hiprt::normalize` from `hiprt/hiprt_math.h`.
+- `Renderer` (`src2/renderer.h` / `.cpp`) owns the CPU and GPU pixel buffers.
+  `Renderer(width, height, max_depth = 3, samples_per_pixel = 1,
+  integrator = Integrator::ray)` accepts
+  a secondary-ray depth limit in [0, 8] and a positive sample count. Both
+  reflections, refractions and diffuse path bounces consume a depth step. The default permits
+  up to four surface hits per branch and uses one pixel-center camera ray.
+  `render(scene, camera, light)` launches 16 x 16 thread blocks and downloads the RGB
+  results, returning `RenderTimings` (GPU, download and total milliseconds);
+  `save(path)` writes a lossless RGB PNG using the existing
+  libpng dependency.
+  Saving before a successful render is an error. Repeated renders reuse the
+  buffers; a failed render invalidates the previous image.
+  Two reusable RAII `GpuEvent` objects time the kernel on the GPU.
+- Internally, `GpuRenderer` contains the scene handle, GPU pixel
+  pointer, dimensions and a `GpuCamera` value. Its `__device__` method `render_pixel()` does the
+  actual work. The small `__global__` function `render_kernel()` is just the
+  entry point that delegates each thread to that method.
+- `DirectionalLight` (declared alongside `Renderer`) normalizes a finite,
+  nonzero direction **toward** the light. The light is white with unit strength;
+  omitting it from `render()` uses direction +Z.
+- `PointLight` takes a finite position, RGB color in [0, 1] (default white)
+  and finite nonnegative intensity (default 1). Its illumination is
+  `color * intensity / distance_squared`; intensity 1 gives unit illumination
+  at distance 1. Both light types use the same Lambert/Phong shading.
+
+```cpp
+Geometry diamond(context, vertices); // The eight mesh triangles defined in src2/main.cpp.
+diamond.build();
+Geometry sphere(context, UnitSphere{});
+sphere.build();
+Geometry box(context, UnitBox{});
+box.build();
+Geometry torus(context, Torus{.major_radius = 0.8f, .minor_radius = 0.25f});
+torus.build();
+Geometry dragon(context, load_ply_vertices("ply/Dragon-ply/Dragon-ply.ply"));
+dragon.build();
+const std::array instances{
+    Instance{.geometry = sphere, .translation = {-3.9f, 1.25f, 0}},
+    Instance{.geometry = sphere, .translation = {-1.3f, 1.25f, 0}},
+    Instance{.geometry = sphere, .translation = {1.3f, 1.25f, 0}},
+    Instance{.geometry = torus, .translation = {3.9f, 1.25f, 0},
+             .rotation_axis = {1, 0, 0}, .rotation_degrees = 65},
+    Instance{.geometry = diamond, .translation = {-3.9f, -1.25f, 0}},
+    Instance{.geometry = dragon, .translation = {-1.3f, -1.25f, 0},
+             .rotation_axis = {0, 1, 0}, .rotation_degrees = -20},
+    Instance{.geometry = dragon, .translation = {1.3f, -1.25f, 0},
+             .rotation_axis = {0, 1, 0}, .rotation_degrees = -45,
+             .scale = {1.1f, 0.8f, 1}},
+    Instance{.geometry = box, .translation = {3.9f, -1.25f, 0},
+             .rotation_axis = {0.5f, 1, 0}, .rotation_degrees = 30,
+             .scale = {0.75f, 0.75f, 0.75f}},
+};
+Scene scene(context, instances);
+scene.build();
+const Camera camera({0, 0, 10}, {0, 0, 0}, {0, 1, 0}, 42.0f);
+Renderer renderer(3840, 2160);
+const PointLight light({-1.0f, 4.0f, 6.0f}, {1.0f, 0.95f, 0.85f}, 65.0f);
+renderer.render(scene, camera, light);
+renderer.save("scene.png");
+```
+
+`Scene` borrows geometries: keep them alive and unchanged until the scene is
+destroyed, and create them with the same `Context`. The CPU `Instance` array
+only needs to live through the scene constructor, which uploads its data.
+Empty scenes, non-finite translations, unbuilt geometries and geometries
+from another context are rejected.
+Scale components must be finite and positive; zero and negative scales are
+not supported in this tutorial step. Rotation angles are finite degrees
+(negative angles and full turns are allowed), converted to radians for
+HIP RT. The axis is normalized with `hiprt::normalize`; its squared length
+must be finite and nonzero in `float`, even for a zero-angle rotation.
+The default axis is +Z, angle is zero, scale is (1, 1, 1), and translation
+is zero, so existing translation-only instances retain their behavior.
+
+Transform order is **scale, rotate, translate**:
+`world = translation + rotation(scale * local)`, or `T * R * S` with column
+vectors. Scaling and rotation use the geometry's local origin as pivot,
+not the triangle's centroid. Positive angles follow the right-hand rule.
+`Context` must outlive `Geometry`, `Scene` and `Renderer`; declaring it first in `main` ensures reverse
+destruction order. Destructors release resources automatically (RAII), including
+during exception unwinding, and report cleanup errors without throwing.
+`Renderer` uses its members' destructors to release its buffers automatically;
+the CPU object itself is never copied to the GPU.
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release --target hiprt_tutorial
+.\build\bin\hiprt_tutorial.exe
+# Small scene:
+.\build\bin\hiprt_tutorial.exe --small
+# Dragon with mirror floor and glass sphere, saved as dragon.png:
+.\build\bin\hiprt_tutorial.exe --dragon
+# Antialiasing: average 16 jittered camera samples per pixel:
+.\build\bin\hiprt_tutorial.exe --dragon --samples 16
+# Path tracing in the Cornell room, saved as cornell-path.png:
+.\build\bin\hiprt_tutorial.exe --cornell --integrator path --samples 64
+# Same six-million-instance scene, camera, sample count and depth in both modes:
+.\build\bin\hiprt_tutorial.exe --integrator ray
+.\build\bin\hiprt_tutorial.exe --integrator path
+# Optional replacement for the shared dragon mesh (Z-up):
+.\build\bin\hiprt_tutorial.exe --small --ply .\tests\fixtures\orientation_z_up.ply
+```
+
+The default mesh is the same separately downloaded dragon used by Detail,
+at `ply/Dragon-ply/Dragon-ply.ply` in the source tree. Its path is configured
+at build time, so the executable also finds it when run from `build\bin`.
+The asset is not bundled; a missing or invalid file is reported as an error,
+not silently replaced. `--ply FILE` overrides it with another Z-up triangle
+PLY, shared by the two mesh placements in the group scenes or used once in
+the dragon-and-mirror scene. Only one of `--small`, `--dragon` and `--cornell` may be selected.
+Every invocation renders exactly one frame, without warmup or repeated measurements.
+`--samples N` applies to every scene and accepts a positive integer
+(default 1). The console reports the selected sample count separately
+from the single rendered frame.
+`--integrator ray|path` defaults to `ray`. Path images use a `-path` suffix:
+`scene-path.png`, `dragon-path.png` or `cornell-path.png`, leaving the corresponding
+ray image untouched. The selected integrator and maximum secondary-ray depth
+(three in the executable) are printed with the sample count.
+The automated tests use small,
+bundled PLY fixtures and do not require the external dragon.
+
+After the device information, expect `Diamond mesh built: 24 vertices, 8 triangles, 1 geometry BVH.`,
+`Analytic sphere built: 1 AABB, no triangles.`,
+`Box mesh built: 36 vertices, 12 triangles, 1 geometry BVH.`,
+`Analytic torus built: major radius 0.8, minor radius 0.25, 1 AABB.`,
+`PLY mesh built: 1 shared geometry BVH.`,
+`Scene BVH built: 6000000 instances (2250000 spheres + 750000 diamond meshes + 1500000 PLY meshes + 750000 box meshes + 750000 tori), 5 shared geometry BVHs.`
+and `Rendered 3840 x 2160 pixels to scene.png.`
+All six million instances are uploaded and included in the scene BVH; there
+is no application-side visibility culling or automatic reduction on allocation
+failure. This mode needs substantial CPU/GPU memory. Progress messages and
+device-wide free-memory snapshots show the setup stages; the memory delta is
+not a peak measurement and can be affected by other GPU users.
+
+Separate one-time wall-clock measurements cover geometry setup/builds, CPU
+instance generation, scene preparation/upload/creation, and scene BVH building
+(including scratch allocation and GPU completion). The CPU description vector
+is released after upload.
+
+The renderer renders the static scene **once** and prints one measurement for:
+
+- **GPU render:** HIP event timestamps around the image kernel on the same
+  default stream; includes traversal, shading and shadow rays, excludes readback.
+- **Image download:** synchronous GPU-to-CPU copy, measured with `steady_clock`
+  after GPU render completion.
+- **Render total:** wall time including host submission, event/synchronization
+  overhead, GPU rendering and download. It is not simply GPU time plus copy time.
+
+PNG encoding/saving happens afterward and is excluded. There are no warmup
+renders or timing statistics; a single measurement may include cold-start
+effects and fluctuate between runs. The large scene uses a wider, oblique camera view of the
+lattice and a repositioned point light; the small view frames the eight-object group.
+Many instances are offscreen or occluded, and camera rays retain their 100-unit
+far limit. This tests static-scene traversal and culling, not six million
+simultaneously visible objects, BVH animation, or complete display FPS.
+The two camera views are not a controlled scaling comparison.
+
+#### Shared tutorial materials
+
+Each `SurfaceMaterial` contains eight floats (32 bytes).
+The six-million-instance scene keeps eight `SurfaceMaterial` values (256 bytes)
+and 6,000,000 32-bit IDs (24,000,000 bytes), rather than 6,000,000 full
+materials (192,000,000 bytes). This saves 167,999,744 bytes, or about 160.217 MiB,
+in explicit GPU buffers. `Material storage` prints the actual palette/ID
+sizes. If every material is unique, IDs add four bytes per instance instead
+of saving memory; the eight-instance test mode therefore uses 32 extra bytes.
+Material rotation changes only the per-instance material assignment, not the
+shared geometry or palette size. Across 750,000 groups there are 4,500,000
+Phong objects, 750,000 mirrors and 750,000 glass objects. Glass PLY replacements
+must be consistently wound, closed solids; the loader does not validate
+watertightness.
+
+Before adding the box and torus, an alternating A/B comparison on the RX 9070 XT
+used the previous 100 x 100 x 100 groups of three spheres and three diamonds
+(six materials), rendered at the former 640 x 360 resolution. At that time,
+materials contained five floats (20 bytes), before adding `reflectivity`.
+With unchanged scene/camera/light settings and byte-identical
+PNGs between material-storage variants, it measured:
+
+| Metric | Per-instance materials | Shared palette + IDs |
+| --- | --- | --- |
+| GPU memory delta after scene setup (device-wide, not peak) | 2109.500 MiB | 2017.938 MiB |
+| GPU render mean | 2.037 ms | 2.013 ms |
+| Render total including download | 2.424 ms | 2.406 ms |
+| Scene preparation/upload/creation | 247.776 ms | 266.576 ms |
+
+Each mode ran six measured processes after discarding an initial process,
+with five warmup frames and twenty measured frames per process. GPU means
+varied from 1.957 to 2.098 ms before and 1.934 to 2.096 ms afterward:
+there was no measurable rendering regression in this workload, but the
+roughly 1% average difference should not be interpreted as a proven speedup.
+CPU material hashing adds about 19 ms to the one-time setup. The benchmark
+used only six unique materials; mostly unique palettes can behave differently.
+These historical timings are not directly comparable to the current five-shape scene.
+
+The shared diamond has local vertices at the six unit-axis endpoints and
+eight outward-facing triangle faces. Both dragon placements reference a single
+PLY vertex buffer and geometry BVH, with different Y rotations and a nonuniform
+scale on the rightmost dragon. The five-million-triangle asset is loaded, fitted
+and uploaded once, not once per instance. Temporary CPU mesh buffers are released
+after upload. The three spheres also share their geometry BVH.
+The box has twelve outward-facing triangles (36 unindexed vertices), handled
+entirely by HIP RT's built-in triangle intersection, just like the diamond.
+It adds no custom box intersection code.
+The renderer uses
+`hiprtSceneTraversalClosest` instead of `hiprtGeomTraversalClosest`; HIP RT
+applies the instance transforms during traversal.
+The sphere uses `hiprtPrimitiveTypeAABBList` with one box from (-1, -1, -1)
+to (1, 1, 1), not a triangle mesh. HIP RT traverses its BVH, then calls our
+GPU `intersectFunc` for a possible hit. Geometry type 0 selects the unit-sphere
+intersection; the function table has one ray type and context-assigned geometry slots.
+No custom payload is needed because every sphere is the same local unit sphere.
+Each distinct torus geometry has its own slot pointing to its GPU radii payload.
+Thus multiple torus geometries with different radii can coexist, while instances
+of one torus share the same bounds, radii and geometry BVH.
+Standalone `Geometry::trace()` selects `hiprtGeomCustomTraversalClosest` for
+custom shapes instead of the triangle-only `hiprtGeomTraversalClosest`.
+Scene traversal supports meshes and custom shapes together; every scene and
+shadow query receives its scene's function table.
+
+For spheres, the callback constructs the polynomial for
+`dot(O + t*D, O + t*D) = 1` and uses the shared `quadratic_roots` solver,
+chooses the nearest root inside `[ray.minT, ray.maxT]`, and returns `t` and
+the outward local normal `O + t*D`. A box hit alone is not a sphere hit.
+Both roots are considered, including rays starting inside the sphere.
+It keeps `dot(D, D)` rather than assuming a unit direction, since instance
+scaling changes local ray lengths. Translation and uniform scale place and
+resize the sphere; nonuniform scale produces an ellipsoid. Existing
+inverse-transpose normals, materials, Phong lighting and any-hit shadows
+work for meshes, spheres and tori.
+
+The torus uses one AABB with half-extents `(R + r, r, R + r)`, then solves
+the local implicit equation
+`(dot(P, P) + R*R - r*r)^2 - 4*R*R*(P.x*P.x + P.z*P.z) = 0`.
+Substituting `P = O + t*D` produces a quartic with up to four real roots.
+The callback selects the first root inside the ray interval and returns
+the analytic outward normal; the hole remains empty for camera and shadow rays.
+Sphere and torus reuse the float-only solvers in `src/math/polynomial.h`.
+The torus coefficient construction is shared with the production renderer in
+`src/math/torus_roots.h`: recentering and power-of-two scaling keep the quartic
+numerically well-scaled. There is no triangulation or sphere tracing.
+
+The example camera is at (0, 0, 10),
+looking at the origin with +Y as up. Its 42-degree vertical
+field of view frames both rows of four objects.
+Change the camera arguments in `main` to move, aim or roll it, or change its
+field of view; the kernel needs no edits. FOV must be finite and strictly
+between 0 and 180 degrees; position and target must differ, and up must be
+nonzero and not parallel to the viewing direction. All input vectors must
+be finite. The up direction need not already be perpendicular to the view.
+Directions whose squared lengths overflow or underflow to zero in `float`
+are rejected explicitly instead of producing invalid camera rays.
+
+The GPU maps pixel sample positions to a view plane at unit distance with half-height
+`tan(vertical_fov / 2)`. The aspect ratio keeps the triangle's proportions
+correct. `generate_ray()` assumes positive image dimensions and in-range
+pixel coordinates and offsets inside the pixel, enforced by the renderer.
+Misses use a dark background.
+The local lighting term uses Lambert diffuse plus a Phong reflection-vector highlight:
+
+```text
+N = normalized world normal
+L = normalized direction toward the light
+V = -incoming_ray.direction
+R = 2 * dot(N, L) * N - L
+diffuse = base_color * max(0, dot(N, L))
+specular = specular_strength * pow(max(0, dot(R, V)), shininess)
+direct = (diffuse + white * specular) * illumination
+```
+
+For a directional light, `illumination` is white with unit strength.
+For a point light, `L = normalize(light_position - hit_position)` and
+`illumination = light_color * intensity / distance_squared`, tinting both
+diffuse and specular. An exact hit at the point source is left unlit because
+the ideal inverse-square model is singular there.
+
+For reflectivity `r`, outgoing color is
+`(1 - r) * direct + r * reflected_color`. The reflection direction is
+`D - 2 * dot(D, N) * N`. An iterative ray loop accumulates floating-point
+radiance and carries a color throughput multiplied by `r` at each reflection;
+clamping happens only when writing the final RGB bytes. Every reflected hit
+receives the same material lookup, local shading and shadow testing as a
+camera hit. Pure mirrors skip local shading and its shadow ray.
+Reflected misses see the dark background. At the depth limit, local lighting
+is still evaluated, but the untraced reflection contributes zero; a zero
+reflection limit evaluates only the primary surface's local term.
+
+Reflection origins use the same fixed 0.001-unit bias, with its sign selected
+from the outgoing direction and geometric normal so back-face reflections
+also avoid self-intersection. Reflected rays use float maximum distance,
+not the camera's 100-unit far limit. Nonreflective materials stop immediately.
+The ray integrator has no GPU recursion, rough reflection or stochastic
+surface scattering. The separate path integrator is described below.
+
+#### Tutorial glass
+
+The dragon scene adds a smooth, closed glass sphere with `transmission = 1`
+and `ior = 1.5`, resting on the mirror floor without intersecting the dragon.
+`src2/dielectric.h` reuses the existing vector refraction helper for Snell's
+law. The outward geometric normal distinguishes entering air-to-glass from
+leaving glass-to-air. The exact unpolarized dielectric Fresnel equations
+determine reflection strength: 4% at normal incidence for IOR 1.5, rising
+toward grazing angles; total internal reflection sends all energy into
+reflection. An index of 1 bends nothing and produces no dielectric reflection.
+
+For mirror reflectivity `r`, transmission `t` and Fresnel reflectance `F`:
+
+```text
+local_weight        = (1 - r) * (1 - t)
+reflection_weight   = r + (1 - r) * t * F
+transmission_weight = (1 - r) * t * (1 - F)
+```
+
+These weights sum to one. Default `t = 0` preserves the old diffuse/mirror
+behavior and images. Transmission is clear and untinted; `base_color` affects
+only the local diffuse term. Both outgoing rays use the signed surface bias
+and see the same scene, materials, lights and background.
+
+The ray integrator follows transmission immediately and defers the reflected sibling
+on a small depth-first stack. There is at most one deferred ray per depth;
+the validated maximum of eight guarantees the stack fits. Each branch has
+its own throughput and depth. At the limit, local shading remains, but
+untraced reflection/transmission contributes zero. There is no random branch
+selection, throughput cutoff or recursive GPU call. Scenes without transmission
+select a separate compile-time kernel specialization that omits the glass stack.
+
+That mode is classical Whitted-style ray tracing, not path tracing. Both modes assume
+separate closed solids surrounded by air (or a camera inside one solid);
+nested/overlapping dielectric media, absorption, dispersion and rough glass
+are not modeled. Shadow rays deliberately retain opaque binary visibility,
+including for glass. With area lights, random path continuation can discover
+refractive caustics, but there is no specialized caustic sampling; those paths
+may be very noisy.
+
+#### Tutorial path tracing: first diffuse step
+
+The path integrator is a separate compile-time GPU kernel specialization, not
+a runtime branch at every bounce. The original ray integrator retains its
+deterministic dielectric splitting and Phong lighting. Both modes share geometry,
+material palettes, traversal, normal transforms, ray bias, image buffers and
+timing code; switching does not duplicate the six-million-instance scene.
+
+For now the non-mirror/non-glass part of a path material is **Lambertian**:
+`f = base_color / pi`. `specular_strength` and `shininess` still affect the
+ray integrator, but not this initial path model. Consequently direct lighting
+is also normalized by `1/pi`, unlike the historical ray shading; equal light
+values do not imply equal image brightness or identical material appearance.
+Diffuse normals face the incoming ray, so finite planes work from either side.
+
+Each hit adds explicitly shadow-tested point/directional lighting, weighted by
+`(1 - reflectivity) * (1 - transmission)`, and samples an area light when present.
+Point/directional lights are delta sources and are evaluated without MIS.
+A miss returns the existing constant background as environment radiance;
+the background is not sampled explicitly.
+
+`src2/path_scattering.h` samples exactly one continuation:
+
+- Choose the perfect-mirror component with probability `reflectivity`.
+- Otherwise choose glass with probability `transmission`; choose reflection
+  with exact Fresnel probability `F`, transmission with `1-F`. TIR always reflects.
+- Otherwise sample a cosine-weighted hemisphere, with PDF `cos(theta)/pi`.
+
+The component weights cancel their selection probabilities. Diffuse
+`f * cos(theta) / PDF` reduces to `base_color`; it must not be multiplied by
+another cosine or mixture/Fresnel factor. Dielectric transmission additionally
+scales radiance throughput by `(eta_incident / eta_transmitted)^2`; entry/exit
+factors cancel through an air-surrounded solid. Mirror/reflection throughput is
+unchanged. No secondary-ray tree or deferred-ray stack is needed.
+
+All samples accumulate unclamped floating-point radiance before one final RGB
+conversion. Pixel/sample seeds are reproducible; one sample still uses a
+pixel-center primary ray, but its surface continuation is stochastic.
+More samples reduce noise, rather than adding repeated timed frames.
+
+The fixed depth limit bounds every path; untraced light at the limit is omitted.
+This first step has no Russian roulette, microfacet
+gloss, nested dielectric media, transparent shadow rays, caustic-specialized
+sampling, or HDR tone mapping/sRGB encoding. Direct-light visibility queries
+still treat glass as opaque. Those are later extensions, not silently approximated features.
+Use equal resolution, sample count and depth for a cost comparison; equal-quality
+comparisons also need to account for path noise and the different diffuse model.
+
+#### Tutorial rectangle lights and MIS
+
+The Cornell room uses eight instances: five walls, a matte sphere, a glass
+sphere and a downward-facing ceiling emitter, sharing just the plane and sphere
+geometry BVHs. The rectangle sits below the ceiling to avoid coplanar
+intersections. Its RGB emission is radiance, not total power: increasing its
+area at unchanged emission increases its total output.
+
+`Scene` collects emitting planes into a small GPU light list (instance ID and
+radiance), separate from the material palette. `src2/area_light.h` reads their
+HIP RT object-to-world matrices, including rotation and nonuniform scaling.
+Sampling chooses one light uniformly and then a uniform point on its world
+rectangle. The corresponding solid-angle density is
+`distance_squared / (light_count * world_area * light_cosine)`.
+The shadow segment is recomputed from the biased origin and bounded at the
+sampled point; the sampled emitter itself is not a blocker. Other objects,
+including glass, still block these straight shadow rays.
+
+The path integrator combines this next-event estimate with BSDF paths that hit
+the emitter, using the existing production power heuristic. Both PDFs are in
+solid angle and include their selection probabilities. For diffuse
+continuation the full mixture PDF is
+`(1-r) * (1-t) * cos(theta) / pi`, not just the conditional hemisphere PDF.
+Camera hits and hits after a delta reflection/refraction receive full emission.
+At the depth limit there is no competing BSDF path, so the light sample gets
+full weight. These rules avoid both double-counting and darkening at the limit.
+
+The ray integrator also samples rectangles for direct lighting and soft
+shadows, retaining its deterministic mirror/glass branching. Its rectangle
+response uses the existing diffuse/Phong heuristic divided by pi, whereas its
+historical point/directional response is unchanged. With no diffuse indirect
+continuation, it needs no MIS. Sampling a finite light for a shadow ray does
+not turn the ray integrator into a path integrator.
+
+Scenes without emitters select kernel specializations that omit all area-light
+sampling, PDF state and emission lookup; the original six-million-instance ray
+image remains unchanged. More samples per pixel smooth the stochastic soft
+shadows in either mode, still within one rendered and timed frame.
+
+#### Tutorial antialiasing
+
+One sample per pixel retains the previous pixel-center ray and image.
+For more samples, each camera ray uses an independent pseudorandom offset
+inside its pixel. The tutorial reuses `Random` from `src/math/random.h` and
+the production camera's pixel/sample seed scheme. Seeds depend only on pixel
+coordinates and sample index, so repeated invocations are reproducible.
+Samples are accumulated within one frame, not across repeated renders.
+
+Every camera sample includes the complete reflection/refraction/shadow computation.
+The renderer sums unclamped floating-point radiance, divides by the sample
+count, then converts to RGB bytes. The subpixel offsets perform pixel-area
+supersampling, not image-space blur. With rectangle lights each sample also
+samples light visibility; path mode additionally samples surface transport.
+It needs no per-sample image
+buffers and still downloads only one RGB image per frame.
+
+Before simplifying the tutorial to one render per invocation, a single-process
+comparison per setting on the RX 9070 XT used the same 4K dragon-and-mirror
+scene, five warmup frames and twenty measured frames:
+
+| Samples per pixel | GPU render mean | Render total mean including download |
+| --- | --- | --- |
+| 1 | 10.954 ms | 12.624 ms |
+| 4 | 31.316 ms | 33.183 ms |
+| 16 | 118.151 ms | 119.997 ms |
+
+The 1-sample PNG was byte-identical to the previous renderer. More samples
+smooth silhouettes, small details, highlights and their reflections, with
+remaining sampling noise at finite sample counts. Timings exclude scene
+setup and PNG saving and are not a repeated-process performance study.
+
+Specular is evaluated only when both light and viewer are on the normal's
+front side. Unlike diffuse lighting, highlights move when the camera moves,
+even on a flat triangle. This is classic Phong reflection-vector lighting,
+not Blinn-Phong (which uses a halfway vector), and not smooth vertex-normal
+interpolation ("Phong shading"). Surface data is uploaded once per distinct
+`SurfaceMaterial`, with one material ID per instance.
+
+HIP RT returns an unnormalized object-space geometric normal, oriented by
+triangle vertex winding. The renderer obtains the inverse transform using
+`hiprtGetWorldToObjectFrameMatrix`, multiplies the normal by its transposed
+linear part, and normalizes with `hiprt::normalize`. This inverse-transpose
+rule keeps normals perpendicular to the surface under nonuniform scaling;
+the ordinary vector transform would be incorrect. Translation does not
+affect normals. In ray mode the normal is not flipped toward the camera: light behind
+the oriented surface contributes no local lighting, with no ambient term.
+Mirror reflections are independent of this direct-light test.
+
+For a front-lit point/directional-light hit, a second ray tests visibility using
+`hiprtSceneTraversalAnyHit` and `hiprtTraversalHintShadowRays`. Unlike closest-hit
+traversal, this query only needs to find any blocker. A hit makes the diffuse
+and specular contributions zero, producing a hard shadow in the local lighting
+term (there is no ambient light); mirror reflections remain visible.
+The shadow ray starts at `point + 0.001f * normal` to avoid self-intersection.
+This fixed world-space bias is appropriate for the tutorial's scale, not a
+general solution for extremely small or large scenes. The ray's default
+maximum distance is float maximum: directional lights are infinitely distant,
+so the camera's 100-unit far limit does not apply to shadow rays.
+For a point light, the shadow direction and distance are recomputed from
+the biased origin. The ray stops just before the light, so geometry beyond
+the light cannot cast a shadow on the hit.
+
+This is classical ray tracing with local Phong lighting and ideal mirror
+reflections, not an energy-conserving physical light-transport model. Local
+diffuse and specular are added, mixed with reflections, and clamped to [0, 1]
+when storing RGB bytes. There is no diffuse indirect lighting, ambient term,
+or gamma correction yet.
+
+`scene.png` is written in the current working directory, overwriting an
+existing file. To keep it beside the executable, run from `build\bin`:
+
+```powershell
+Push-Location .\build\bin
+.\hiprt_tutorial.exe
+Pop-Location
+```
+
+Open the image in any PNG viewer. `save(path)` always writes PNG data.
+
+The final message is `HIP RT context destroyed.` A HIP-compatible AMD GPU and
+the same SDK/runtime as the renderer are required. The tutorial now links the
+HIP RT device library as well as the host API.
+
 ## Command-line reference
 
 ```text
@@ -55,6 +674,7 @@ hiprt_demo.exe [options]
 | `--relative-error VALUE` | Adaptive relative RGB noise threshold; lower demands more samples. | `0.05` |
 | `--brightness-floor VALUE` | Brightness floor when checking noise in dark pixels. | `0.05` |
 | `--device N` | HIP device index; `-1` automatically prefers a compatible discrete GPU. | `-1` |
+| `--unified-traversal[=true\|false]` | Experimental shared scene traversal for base custom geometry, meshes and instances. Also supported in render configs. | `false` |
 
 Quote CLI paths containing spaces. Unknown/abbreviated options, duplicate
 options within one input, invalid values and positional arguments are rejected.
@@ -65,6 +685,55 @@ An explicitly selected GPU must exist and match the compiled GPU architecture.
 PNG is lossless and stores the same pixels as BMP, usually in a much smaller
 file. Unsupported or missing image extensions are rejected before GPU setup.
 Existing output images are overwritten.
+
+### Experimental unified traversal
+
+The default production path queries base custom geometry, the base triangle
+mesh and explicit instances separately. `--unified-traversal` instead builds
+one HIP RT scene containing identity instances of the base custom/mesh BVHs
+and the existing transformed placements. The lower-level geometry BVHs and
+per-prototype buffers are still shared. The analytic room remains a separate
+intersection in both modes.
+
+Root instance IDs select the base custom or mesh shading path; placement IDs
+are offset back into the existing instance/material/light buffers. Surface
+shading is shared between modes, preserving logical object IDs, CSG leaf
+materials, prototype-space textures and emitter PDFs. Closest-hit and bounded
+any-hit queries use the shared scene. Separate compile-time `Unified` and
+`Instanced` kernel variants keep unused traversal code out of the selected path.
+
+To reproduce an A/B comparison, use identical settings and change only the flag:
+
+```powershell
+.\build\bin\hiprt_demo.exe --scene detail --width 1280 --height 720 --sampling fixed --samples 128 --batch-size 8 --unified-traversal=false -o split.png
+.\build\bin\hiprt_demo.exe --scene detail --width 1280 --height 720 --sampling fixed --samples 128 --batch-size 8 --unified-traversal -o unified.png
+```
+
+Measured on the RX 9070 XT / gfx1201 with HIP RT 3.0.2: mean GPU render time
+over three runs per mode, after discarding an initial run per mode. Modes
+were alternated, using the same executable, deterministic fixed sampling and
+batch size 8. GPU times exclude loading/building the scene and saving images.
+
+| Scene | Resolution / samples | Split | Unified | Unified change |
+| --- | --- | --- | --- | --- |
+| detail | 640 x 360 / 64 | 0.451 s | 0.525 s | +16.5% |
+| csg_text | 640 x 360 / 64 | 1.385 s | 1.427 s | +3.0% |
+| instancing | 640 x 360 / 64 | 0.565 s | 0.567 s | +0.4%, effectively unchanged |
+| detail | 1280 x 720 / 128 | 3.207 s | 3.773 s | +17.6% |
+
+Detail and CSG-text images were byte-identical across modes, including the
+larger detail comparison. In the instancing image, 15 of 230400 pixels differed
+by at most one RGB code value. GPU regression tests compare hits, materials,
+normals, CSG leaf IDs, bounded visibility and emitter PDFs; both fixed and
+adaptive integration tests also exercise unified rendering.
+
+This experiment does **not** show a performance benefit, so split traversal
+remains the default. Unlike the tutorial's many independently bounded
+placements, ordinary scenes add only a few broad base-geometry bounds to the
+top-level scene. A shared top-level traversal is not automatically cheaper.
+Determining the dominant instruction/memory bottleneck still requires profiling;
+these measurements alone do not attribute the render time to CSG, shading or
+register pressure.
 
 ### Common commands
 

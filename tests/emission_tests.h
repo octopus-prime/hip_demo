@@ -13,14 +13,15 @@ struct OcclusionProbe {
     bool blocked;
 };
 
+template<bool Unified>
 __global__ void check_occlusion(TraceScene scene, const OcclusionProbe* probes, unsigned int count,
                                 unsigned int* failure) {
     const unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < count) {
         const auto probe = probes[i];
         Hit reference{};
-        const bool blocked = hit_scene(probe.ray, reference, scene) && reference.distance < probe.maximum;
-        if (blocked != probe.blocked || occluded(probe.ray, probe.maximum, scene) != probe.blocked)
+        const bool blocked = hit_scene<true, Unified>(probe.ray, reference, scene) && reference.distance < probe.maximum;
+        if (blocked != probe.blocked || occluded<true, Unified>(probe.ray, probe.maximum, scene) != probe.blocked)
             atomicOr(failure, 1u);
     }
     Random random{i * 2891336453u + 741103597u};
@@ -28,8 +29,8 @@ __global__ void check_occlusion(TraceScene scene, const OcclusionProbe* probes, 
                   random_unit_vector(random)};
     const float maximum = 8 * random.next();
     Hit reference{};
-    const bool blocked = hit_scene(ray, reference, scene) && reference.distance < maximum;
-    if (occluded(ray, maximum, scene) != blocked) atomicOr(failure, 2u);
+    const bool blocked = hit_scene<true, Unified>(ray, reference, scene) && reference.distance < maximum;
+    if (occluded<true, Unified>(ray, maximum, scene) != blocked) atomicOr(failure, 2u);
 }
 
 inline void run_occlusion_tests(int device, SceneDescription description) {
@@ -40,7 +41,6 @@ inline void run_occlusion_tests(int device, SceneDescription description) {
     auto prepared = prepare_scene(description);
     append_triangle(prepared.vertices, {3, 1, 0}, {5, 1, 0}, {4, 3, 0});
     prepared.triangle_materials.resize(1, {prepare_material(glass), 2});
-    const HiprtScene scene(device, std::move(prepared));
     const std::vector<OcclusionProbe> probes{
         {{{-4, 2, 3}, {0, 0, -1}}, 2, false},
         {{{-4, 2, 3}, {0, 0, -1}}, 2.01f, true},
@@ -60,13 +60,17 @@ inline void run_occlusion_tests(int device, SceneDescription description) {
     auto failure = allocate_device<unsigned int>(1, "Allocating occlusion failures");
     check_hip(hipMemcpy(input.get(), probes.data(), probes.size() * sizeof(OcclusionProbe), hipMemcpyHostToDevice),
               "Uploading occlusion probes");
-    check_hip(hipMemset(failure.get(), 0, sizeof(unsigned int)), "Clearing occlusion failures");
-    hipLaunchKernelGGL(check_occlusion, dim3(16), dim3(256), 0, 0, scene.scene(), input.get(),
-                       static_cast<unsigned int>(probes.size()), failure.get());
-    check_hip(hipGetLastError(), "Launching occlusion checks");
-    unsigned int result = 0;
-    check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost), "Reading occlusion checks");
-    if (result) throw std::runtime_error("Bounded occlusion checks failed (flags " + std::to_string(result) + ")");
+    for (const bool unified : {false, true}) {
+        const HiprtScene scene(device, prepared, nullptr, 0, unified);
+        check_hip(hipMemset(failure.get(), 0, sizeof(unsigned int)), "Clearing occlusion failures");
+        const auto kernel = unified ? check_occlusion<true> : check_occlusion<false>;
+        hipLaunchKernelGGL(kernel, dim3(16), dim3(256), 0, 0, scene.scene(), input.get(),
+                           static_cast<unsigned int>(probes.size()), failure.get());
+        check_hip(hipGetLastError(), "Launching occlusion checks");
+        unsigned int result = 0;
+        check_hip(hipMemcpy(&result, failure.get(), sizeof(result), hipMemcpyDeviceToHost), "Reading occlusion checks");
+        if (result) throw std::runtime_error("Bounded occlusion checks failed (flags " + std::to_string(result) + ")");
+    }
 }
 
 __global__ void check_emitter_samples(TraceScene scene, unsigned int* counts, unsigned int* failure) {

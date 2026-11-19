@@ -41,6 +41,10 @@ struct TraceScene {
     const GpuInstance* instances = nullptr;
     const GpuPrototype* prototypes = nullptr;
     const GpuMaterial* csg_materials = nullptr;
+    hiprtScene unified_scene = nullptr;
+    unsigned int unified_custom = hiprtInvalidValue;
+    unsigned int unified_mesh = hiprtInvalidValue;
+    unsigned int unified_instance_offset = 0;
 };
 
 struct GpuPrototype {

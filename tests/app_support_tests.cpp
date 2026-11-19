@@ -26,11 +26,11 @@ hip_demo::AppOptions options(std::vector<std::string> arguments) {
 void check_options(const std::string& fixture, std::filesystem::path temporary) {
     const auto original = options({"renderer", "--scene", fixture});
     const auto changed = options({"renderer", "--output", "changed.bmp", "--samples", "9",
-        "--sampling", "fixed", "--width", "17", "--height", "9", "--scene", fixture});
+        "--sampling", "fixed", "--width", "17", "--height", "9", "--scene", fixture, "--unified-traversal"});
     if (original.render.output != "render.png" || original.render.sampling.maximum != 1024 ||
         changed.render.output != "changed.bmp" || changed.render.sampling.maximum != 9 ||
         changed.render.sampling.adaptive || changed.render.width != 17 || changed.render.height != 9 ||
-        changed.scene != original.scene) {
+        changed.scene != original.scene || original.render.unified_traversal || !changed.render.unified_traversal) {
         throw std::runtime_error("CLI render options and scene selection are not independent");
     }
     temporary.replace_extension(".cfg");
@@ -38,7 +38,7 @@ void check_options(const std::string& fixture, std::filesystem::path temporary) 
         std::ofstream file(temporary);
         file << "width = 320\nheight = 200\noutput = images with spaces.png\nsampling = fixed\n"
                 "samples = 11\nmin-samples = 3\nspecular-min-samples = 7\nbatch-size = 4\n"
-                "relative-error = 0.08\nbrightness-floor = 0.03\ndevice = 0\n";
+                "relative-error = 0.08\nbrightness-floor = 0.03\ndevice = 0\nunified-traversal = true\n";
     }
     const auto loaded = options({"renderer", "--config", temporary.string(), "--scene", fixture,
         "--width", "640", "--samples", "19", "--sampling", "adaptive"});
@@ -46,8 +46,11 @@ void check_options(const std::string& fixture, std::filesystem::path temporary) 
     if (render.width != 640 || render.height != 200 || render.output != "images with spaces.png" ||
         !render.sampling.adaptive || render.sampling.maximum != 19 || render.sampling.minimum != 3 ||
         render.sampling.specular_minimum != 7 || render.sampling.batch != 4 ||
-        render.sampling.relative_error != 0.08f || render.sampling.brightness_floor != 0.03f || render.device != 0)
+        render.sampling.relative_error != 0.08f || render.sampling.brightness_floor != 0.03f || render.device != 0 ||
+        !render.unified_traversal)
         throw std::runtime_error("CLI > config > defaults precedence failed");
+    if (options({"renderer", "--config", temporary.string(), "--unified-traversal=false"}).render.unified_traversal)
+        throw std::runtime_error("Explicit split traversal did not override the unified config");
     auto saved = render;
     saved.sampling.relative_error = 0.123456791f;
     hip_demo::save_render_config(saved, temporary.string());
@@ -59,7 +62,7 @@ void check_options(const std::string& fixture, std::filesystem::path temporary) 
         restored.sampling.specular_minimum != saved.sampling.specular_minimum ||
         restored.sampling.batch != saved.sampling.batch ||
         restored.sampling.brightness_floor != saved.sampling.brightness_floor ||
-        restored.sampling.adaptive != saved.sampling.adaptive)
+        restored.sampling.adaptive != saved.sampling.adaptive || restored.unified_traversal != saved.unified_traversal)
         throw std::runtime_error("Saved effective render options did not round-trip");
     const auto help = options({"renderer", "--help", "--config", "nonexistent.cfg"});
     if (!help.help || help.help_text.find("--width") == std::string::npos ||

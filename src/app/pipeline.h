@@ -48,7 +48,8 @@ inline int run_demo(int argc, char** argv) {
                   << " samples per pixel (" << (sampling.adaptive ? "adaptive" : "fixed") << ").\n";
         std::cout << "Preparing scene and GPU buffers...\n" << std::flush;
         auto prepared = prepare_scene(description);
-        const HiprtScene scene(device.id, std::move(prepared));
+        const HiprtScene scene(device.id, std::move(prepared), nullptr, 0, render.unified_traversal);
+        std::cout << "Traversal: " << (render.unified_traversal ? "unified" : "split") << ".\n";
         const auto rendered = render_image(scene.scene(), render);
         std::cout << "Copying image to CPU and writing "
                   << (format == ImageFormat::png ? "PNG" : "BMP") << "...\n" << std::flush;

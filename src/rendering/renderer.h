@@ -53,8 +53,12 @@ inline GpuImage render_image(TraceScene scene, const RenderOptions& options) {
     HipEvent start;
     HipEvent stop;
     // Keep unused instance traversal/sampling code out of ordinary scenes' GPU kernels.
-    const auto fixed_kernel = scene.instance_scene ? render_kernel<true> : render_kernel<false>;
-    const auto adaptive_kernel = scene.instance_scene ? render_adaptive_kernel<true> : render_adaptive_kernel<false>;
+    const auto fixed_kernel = scene.unified_scene
+        ? (scene.instances ? render_kernel<true, true> : render_kernel<false, true>)
+        : (scene.instances ? render_kernel<true> : render_kernel<false>);
+    const auto adaptive_kernel = scene.unified_scene
+        ? (scene.instances ? render_adaptive_kernel<true, true> : render_adaptive_kernel<false, true>)
+        : (scene.instances ? render_adaptive_kernel<true> : render_adaptive_kernel<false>);
     float render_milliseconds = 0.0f;
     int last_progress = 0;
     std::cout << "Rendering: 0% (0/" << sample_count << " sample passes)" << std::flush;
